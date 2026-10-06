@@ -56,13 +56,19 @@ The generated PDF is always in English.
   exactly which document pages that means. Choose a corner and a width (60-180 pt); the seal keeps
   its aspect ratio, sits inside the original page area, stays upright on rotated pages and is
   never placed on the cover or index.
+- **AI help** (optional, your own Anthropic API key): *Ask AI* on a file, or *Ask AI for all
+  unmatched files*, sends the PDF to Claude (`claude-opus-5-5`, structured JSON output) and shows a
+  suggestion such as "Signed Declaration · no expiry". Nothing changes until you click *Accept*,
+  which uses the normal matching rules and fills the expiry date if one was found. The key is kept
+  in memory (or this tab's sessionStorage if you tick *Remember*), never in the code or saved work.
 - **Save and reopen**: your work (requirements, files, matches, dates, options) is saved in this
   browser's IndexedDB after every change and restored when you come back. *Start over* clears it.
 
 ## Privacy
 
 Everything stays in your browser. Files are never uploaded, stored on a server or sent to
-any external service. To let you continue later, your work is kept in this browser's own storage
+any external service. The one exception is the optional AI help: only when you add your own API
+key and click *Ask AI* (after a confirmation) is that file sent to Anthropic. To let you continue later, your work is kept in this browser's own storage
 (IndexedDB) on this computer only; *Start over* deletes it.
 
 ## How the package is built
@@ -80,11 +86,18 @@ any external service. To let you continue later, your work is kept in this brows
 - Unusual characters in the JSON are converted to safe ASCII before drawing, so generation never
   fails because of a curly quote or a non-Latin character.
 
+## Deploy
+
+Any static host works (`npm run build`, publish `dist/`). For Vercel, `vercel.json` pins the Vite
+preset, the build command and the `dist` output, and `package.json` asks for Node 22
+(Vite 8 needs Node 20.19+ or 22.12+).
+
 ## Tech stack
 
 - Vite + React (JavaScript), Tailwind CSS v4 (`@tailwindcss/vite`)
 - [pdf-lib](https://pdf-lib.js.org/) for reading, page counting, merging, cover page and footers
 - [JSZip](https://stuk.github.io/jszip/) for loading a whole pack from a .zip
+- `@anthropic-ai/sdk` (loaded only when AI help is used)
 - Web Crypto SHA-256 for duplicate detection (with a pure-JS fallback on non-secure origins)
 - lucide-react icons, Inter + Hind Siliguri fonts
 - vitest for unit tests
@@ -106,6 +119,7 @@ src/
   utils/storage.js            IndexedDB save / restore
   utils/seal.js               seal PNG checks, page selection, placement
   utils/banglaText.js         Bangla names rendered to PNG (canvas) for the index page
+  utils/aiAssist.js           optional AI suggestion (request, reply parsing, errors)
   components/                 UI
 tests/                        vitest unit tests
 scripts/verify-sample.mjs     sample-pack smoke test
