@@ -4,6 +4,7 @@ import { useI18n, useStore } from "../state/contexts.js";
 import { buildPackage } from "../utils/packageGenerator.js";
 import { downloadBytes, openPdfInNewTab, packageFileName, revokePreview } from "../utils/download.js";
 import { todayLocalYmd } from "../utils/dates.js";
+import { hasBangla, renderBanglaLabels } from "../utils/banglaText.js";
 import BlockingIssues from "./BlockingIssues.jsx";
 
 const nextPaint = () => new Promise((resolve) => setTimeout(resolve, 40));
@@ -24,11 +25,25 @@ export default function GeneratePanel() {
     setBusy(true);
     try {
       await nextPaint(); // let the spinner show before the CPU-heavy work starts
+      // Bangla names for the index page, drawn as images (pdf-lib cannot shape Bangla text).
+      let banglaLabels = null;
+      if (state.options.includeIndex) {
+        try {
+          banglaLabels = await renderBanglaLabels(
+            summary.included
+              .filter(({ req }) => req.title_bn !== req.title_en && hasBangla(req.title_bn))
+              .map(({ req }) => ({ key: req.id, text: req.title_bn })),
+          );
+        } catch {
+          banglaLabels = null; // the index still lists the English names
+        }
+      }
       const bytes = await buildPackage({
         tender: state.tender,
         includedDocs: summary.included.map(({ req, file }) => ({ req, file })),
         createdDate: todayLocalYmd(),
         includeIndex: state.options.includeIndex,
+        banglaLabels,
       });
       const fileName = packageFileName(state.tender.tender_id);
       downloadBytes(bytes, fileName);

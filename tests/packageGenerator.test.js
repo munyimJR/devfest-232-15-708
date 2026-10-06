@@ -12,6 +12,7 @@ import {
   wrapText,
 } from "../src/utils/packageGenerator.js";
 import { safeText } from "../src/utils/pdfText.js";
+import { makePng } from "./helpers.js";
 
 const tender = {
   tender_id: "T-TEST-1",
@@ -179,6 +180,41 @@ describe("index page", () => {
     expect(cover).toContain(hexOf("Page 3"));
     expect(cover).toContain(hexOf("Page 5"));
     expect(index).toContain(hexOf(footerText("T-TEST-1", 2, 5)));
+  });
+
+  it("draws the Bangla title images on the index page only", async () => {
+    const src = await makePdf([{}]);
+    const label = { png: makePng(120, 40), width: 120, height: 40, baseline: 30, fontSizePx: 64 };
+    const xObjectCount = (page) => page.node.Resources()?.lookup(PDFName.of("XObject"))?.keys().length ?? 0;
+    const withIndex = await PDFDocument.load(
+      await buildPackage({
+        tender,
+        includedDocs: [doc("R1", 1, "Alpha", src, 1)],
+        createdDate: "2026-10-06",
+        includeIndex: true,
+        banglaLabels: { R1: label, R9: label },
+      }),
+    );
+    expect(xObjectCount(withIndex.getPage(1))).toBe(1);
+    expect(xObjectCount(withIndex.getPage(0))).toBe(0);
+    const withoutIndex = await PDFDocument.load(
+      await buildPackage({ tender, includedDocs: [doc("R1", 1, "Alpha", src, 1)], createdDate: "2026-10-06", banglaLabels: { R1: label } }),
+    );
+    expect(withoutIndex.getPageCount()).toBe(2);
+    expect(xObjectCount(withoutIndex.getPage(0))).toBe(0);
+  });
+
+  it("skips a broken label image instead of failing", async () => {
+    const src = await makePdf([{}]);
+    const bad = { png: new Uint8Array([1, 2, 3]), width: 10, height: 10, baseline: 8, fontSizePx: 64 };
+    const bytes = await buildPackage({
+      tender,
+      includedDocs: [doc("R1", 1, "Alpha", src, 1)],
+      createdDate: "2026-10-06",
+      includeIndex: true,
+      banglaLabels: { R1: bad },
+    });
+    expect((await PDFDocument.load(bytes)).getPageCount()).toBe(3);
   });
 
   it("links the cover and index entries to the documents and adds bookmarks", async () => {

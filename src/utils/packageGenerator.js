@@ -73,9 +73,12 @@ export function documentStartPages(pageCounts, { includeIndex = false } = {}) {
  * @param {Array}  args.includedDocs  [{ req, file }] already sorted by requirement order
  * @param {string} args.createdDate   local date, YYYY-MM-DD
  * @param {boolean} [args.includeIndex] add an index page after the cover
+ * @param {object} [args.banglaLabels] { [requirementId]: { png, width, height, baseline, fontSizePx } }
+ *   PNG images of the Bangla titles (rendered by the UI), shown next to the English names on
+ *   the index page
  * @returns {Promise<Uint8Array>}
  */
-export async function buildPackage({ tender, includedDocs, createdDate, includeIndex = false }) {
+export async function buildPackage({ tender, includedDocs, createdDate, includeIndex = false, banglaLabels = null }) {
   const out = await PDFDocument.create();
   const fonts = {
     regular: await out.embedFont(StandardFonts.Helvetica),
@@ -101,10 +104,23 @@ export async function buildPackage({ tender, includedDocs, createdDate, includeI
   }
   const pageCounts = sources.map((src) => src.getPageCount());
   const startPages = documentStartPages(pageCounts, { includeIndex });
+  const labels = {};
+  if (includeIndex && banglaLabels) {
+    for (const { req } of includedDocs) {
+      const label = banglaLabels[req.id];
+      if (!label?.png) continue;
+      try {
+        labels[req.id] = { ...label, embedded: await out.embedPng(label.png) };
+      } catch {
+        // an unusable image is skipped; the English name is still shown
+      }
+    }
+  }
   const entries = includedDocs.map((doc, index) => ({
     title: doc.req.title_en,
     pages: pageCounts[index],
     startPage: startPages[index],
+    label: labels[doc.req.id] ?? null,
   }));
 
   const cover = out.addPage([A4.width, A4.height]);
@@ -271,7 +287,7 @@ function drawIndexPage(page, fonts, { tender, entries }) {
   drawRule(page, margin, y, contentWidth, 0.75);
   y -= 22;
 
-  const items = entries.map((entry) => ({ text: safeText(entry.title), page: String(entry.startPage) }));
+  const items = entries.map((entry) => ({ text: safeText(entry.title), page: String(entry.startPage), image: entry.label }));
   const links = drawEntryList(page, fonts, items, { x: margin, top: y, width: contentWidth, bottom: 84, leaders: true });
 
   drawRule(page, margin, 66, contentWidth, 0.5);
@@ -282,22 +298,40 @@ function drawIndexPage(page, fonts, { tender, entries }) {
 
 /**
  * Numbered list that always fits between `top` and `bottom` (the font shrinks if needed).
- * items: [{ text, page }]. With `leaders`, dots run from the title to a bold page number
- * (index style); otherwise the page label sits right-aligned in muted text (cover style).
+ * items: [{ text, page, image? }]. With `leaders`, dots run from the title to a bold page
+ * number (index style); otherwise the page label sits right-aligned in muted text (cover
+ * style). `image` is an embedded PNG of the Bangla title, placed after the English title on
+ * the same line, or on its own line below when it does not fit.
  * Returns [{ entry, rect }] so each entry can link to its document.
  */
 function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
   const { regular, bold } = fonts;
   const available = top - bottom;
   const pageFont = leaders ? bold : regular;
+
   const layout = (size, maxLines) => {
     const lineHeight = size * 1.42;
     const gap = size * (leaders ? 0.75 : 0.55);
+    const imageGap = size * 0.8;
     const numberWidth = textWidth(bold, `${items.length}.`, size) + size * 0.8;
     const pageWidth = Math.max(0, ...items.map((item) => textWidth(pageFont, item.page, size)));
     const titleWidth = width - numberWidth - pageWidth - size * 2;
-    const blocks = items.map((item) => clampLines(wrapText(item.text, regular, size, titleWidth), maxLines, regular, size, titleWidth));
-    const height = blocks.reduce((sum, lines) => sum + lines.length * lineHeight, 0) + gap * Math.max(0, items.length - 1);
+    const blocks = items.map((item) => {
+      const lines = clampLines(wrapText(item.text, regular, size, titleWidth), maxLines, regular, size, titleWidth);
+      const block = { lines, image: null, height: lines.length * lineHeight };
+      if (item.image) {
+        // Bangla glyphs drawn at about the same size as the English text.
+        let scale = (size * 1.02) / item.image.fontSizePx;
+        const lastWidth = textWidth(regular, lines[lines.length - 1], size);
+        const ownLine = lastWidth + imageGap + item.image.width * scale > titleWidth;
+        if (ownLine && item.image.width * scale > titleWidth) scale = titleWidth / item.image.width;
+        block.image = { ...item.image, scale, ownLine, offset: ownLine ? 0 : lastWidth + imageGap };
+        // Bangla needs a little more height (vowel signs above and below the line).
+        block.height += ownLine ? lineHeight * 1.2 : size * 0.35;
+      }
+      return block;
+    });
+    const height = blocks.reduce((sum, block) => sum + block.height, 0) + gap * Math.max(0, items.length - 1);
     return { size, lineHeight, gap, numberWidth, pageWidth, blocks, height };
   };
 
@@ -313,8 +347,14 @@ function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
   if (!chosen) {
     // Extremely long lists: one line per item and stop before the page bottom.
     chosen = layout(7, 1);
-    const perItem = chosen.lineHeight + chosen.gap;
-    const fit = Math.max(1, Math.floor((available - chosen.lineHeight) / perItem));
+    let used = 0;
+    let fit = 0;
+    for (const block of chosen.blocks) {
+      if (used + block.height + chosen.lineHeight > available) break;
+      used += block.height + chosen.gap;
+      fit += 1;
+    }
+    fit = Math.max(1, fit);
     if (fit < items.length) {
       hidden = items.length - fit;
       chosen.blocks = chosen.blocks.slice(0, fit);
@@ -322,24 +362,39 @@ function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
   }
 
   const { size, lineHeight, gap, numberWidth, pageWidth, blocks } = chosen;
+  const textX = x + numberWidth;
   const right = x + width;
   const links = [];
   let y = top;
-  blocks.forEach((lines, index) => {
+  blocks.forEach(({ lines, image, height }, index) => {
     const number = `${index + 1}.`;
     page.drawText(number, {
-      x: x + numberWidth - size * 0.8 - textWidth(bold, number, size),
+      x: textX - size * 0.8 - textWidth(bold, number, size),
       y,
       size,
       font: bold,
       color: COLORS.teal,
     });
     lines.forEach((line, lineIndex) => {
-      page.drawText(line, { x: x + numberWidth, y: y - lineIndex * lineHeight, size, font: regular, color: COLORS.text });
+      page.drawText(line, { x: textX, y: y - lineIndex * lineHeight, size, font: regular, color: COLORS.text });
     });
 
-    // Page label on the last line of the entry.
-    const lastY = y - (lines.length - 1) * lineHeight;
+    // The last line carries the page label (and the Bangla image when it has its own line).
+    let lastY = y - (lines.length - 1) * lineHeight;
+    let lastEnd = textX + textWidth(regular, lines[lines.length - 1], size);
+    if (image) {
+      const baseline = image.ownLine ? lastY - lineHeight * 1.2 : lastY;
+      const imageX = textX + image.offset;
+      page.drawImage(image.embedded, {
+        x: imageX,
+        y: baseline - (image.height - image.baseline) * image.scale,
+        width: image.width * image.scale,
+        height: image.height * image.scale,
+      });
+      lastY = baseline;
+      lastEnd = imageX + image.width * image.scale;
+    }
+
     const label = items[index].page;
     const labelWidth = textWidth(pageFont, label, size);
     page.drawText(label, {
@@ -350,7 +405,7 @@ function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
       color: leaders ? COLORS.ink : COLORS.muted,
     });
     if (leaders) {
-      const textEnd = x + numberWidth + textWidth(regular, lines[lines.length - 1], size) + size * 0.5;
+      const textEnd = lastEnd + size * 0.5;
       const leaderEnd = right - pageWidth - size * 0.6; // same end on every row
       const dot = ". ";
       const dotWidth = textWidth(regular, dot, size);
@@ -368,12 +423,12 @@ function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
 
     links.push({
       entry: index,
-      rect: { x, y: lastY - size * 0.35, width, height: (lines.length - 1) * lineHeight + size * 1.3 },
+      rect: { x, y: lastY - size * 0.45, width, height: y - lastY + size * 1.4 },
     });
-    y -= lines.length * lineHeight + gap;
+    y -= height + gap;
   });
   if (hidden > 0) {
-    page.drawText(`... and ${hidden} more`, { x: x + numberWidth, y, size, font: regular, color: COLORS.muted });
+    page.drawText(`... and ${hidden} more`, { x: textX, y, size, font: regular, color: COLORS.muted });
   }
   return links;
 }

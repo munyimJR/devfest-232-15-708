@@ -149,6 +149,6 @@ describe("validateRequirements", () => {
     const result = validateRequirements(data);
     const bn = translate("bn", `err.${result.error.code}`, result.error.params);
     expect(bn).not.toBe(`err.${result.error.code}`);
-    expect(bn).toMatch(/[ঀ-৿]/);
+    expect(bn).toMatch(/[\u0980-\u09FF]/);
   });
 });

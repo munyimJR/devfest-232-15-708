@@ -64,7 +64,9 @@ any external service. To let you continue later, your work is kept in this brows
 
 - **Cover page** (A4): tender ID, title, procuring entity, bidder, deadline, creation date and
   the numbered list of included documents with page counts and start pages.
-- **Index page** (optional): every document with the page where it starts, with dot leaders.
+- **Index page** (optional): every document with the page where it starts, with dot leaders,
+  and its Bangla name next to the English one. pdf-lib cannot shape Bangla script, so the UI
+  renders each Bangla name with the Bangla web font on a canvas and embeds it as a PNG.
 - **Documents** in requirement `order` (never by file name), all pages in their original order.
   Optional documents without a file are skipped.
 - **Footer** `<tender_id> | Page N of M` on every page, including the cover. It is drawn in a
