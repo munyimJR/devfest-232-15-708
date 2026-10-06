@@ -68,10 +68,16 @@ export default function UploadZone() {
 
       <div className="p-4">
         <DropZone
-          onDrop={({ items, hasFolders }) =>
+          onDrop={({ items, hasFolders }) => {
+            const zip = items.find((item) => /\.zip$/i.test(item.path));
+            if (zip) {
+              // A .zip is a whole pack: it replaces the current tender after confirmation.
+              actions.loadPack(zip.file, { confirmReplace: () => window.confirm(t("confirm.replacePack")) });
+              return;
+            }
             // A dropped folder may hold a whole pack: only its document files are added here.
-            actions.addFiles(hasFolders ? splitPackFiles(items).documents : items.map((item) => item.file))
-          }
+            actions.addFiles(hasFolders ? splitPackFiles(items).documents : items.map((item) => item.file));
+          }}
           activeLabel={t("upload.dropActive")}
         >
           <div className="flex flex-col items-center px-4 py-6 text-center">

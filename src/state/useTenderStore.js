@@ -7,6 +7,7 @@ import { MAX_FILES, MAX_TOTAL_BYTES, inspectIncomingFile } from "../utils/pdfFil
 import { parseRequirementsText } from "../utils/requirements.js";
 import { buildChecklist, fileUsage, findDuplicates, summarizeChecklist } from "../utils/status.js";
 import { revokeAllPreviews, revokePreview } from "../utils/download.js";
+import { MAX_ZIP_BYTES, readPackZip } from "../utils/zipPack.js";
 
 const MAX_MESSAGES = 100;
 
@@ -59,6 +60,16 @@ export function reducer(state, action) {
         matches: {},
         expiry: {},
         requirementsError: null,
+      };
+
+    case "loadPack":
+      // A whole pack replaces everything: tender, requirements, files, matches and dates.
+      return {
+        ...createInitialState(state.lang),
+        seq: state.seq,
+        tender: action.tender,
+        requirements: action.requirements,
+        messages: state.messages.filter((m) => m.kind === "toast"),
       };
 
     case "requirementsError": {
@@ -203,37 +214,6 @@ export function useTenderStore() {
 
   const notify = useCallback((level, key, params) => dispatch({ type: "notify", level, key, params }), []);
 
-  /** Read, validate and load requirements.json. `confirmReplace` is asked before replacing matches. */
-  const loadRequirementsFile = useCallback(async (file, { confirmReplace } = {}) => {
-    if (!file) return false;
-    let text;
-    try {
-      text = await file.text();
-    } catch {
-      dispatch({ type: "requirementsError", error: { key: "err.json_unreadable" } });
-      return false;
-    }
-    const result = parseRequirementsText(text);
-    if (!result.ok) {
-      const looksLikeJson = /\.json$/i.test(file.name) || file.type === "application/json";
-      const error =
-        result.error.code === "json_invalid" && !looksLikeJson
-          ? { key: "json.notJson", params: { name: file.name } }
-          : { key: `err.${result.error.code}`, params: result.error.params };
-      dispatch({ type: "requirementsError", error });
-      return false;
-    }
-    if (confirmReplace && !confirmReplace()) return false;
-    dispatch({ type: "loadRequirements", tender: result.tender, requirements: result.requirements });
-    dispatch({
-      type: "notify",
-      level: "success",
-      key: "json.loaded",
-      params: { count: result.requirements.length, id: result.tender.tender_id },
-    });
-    return true;
-  }, []);
-
   /** Send files through the upload pipeline, one at a time, in the order given. */
   const addFiles = useCallback((list) => {
     const incoming = Array.from(list ?? []);
@@ -276,6 +256,72 @@ export function useTenderStore() {
     queueRef.current = queueRef.current.then(run, run);
     return queueRef.current;
   }, []);
+
+  /** Read, validate and load requirements.json. `confirmReplace` is asked before replacing matches. */
+  const loadRequirementsFile = useCallback(async (file, { confirmReplace } = {}) => {
+    if (!file) return false;
+    const fail = (key, params) => {
+      dispatch({ type: "requirementsError", error: { key, params, title: "json.errorTitle" } });
+      return false;
+    };
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      return fail("err.json_unreadable");
+    }
+    const result = parseRequirementsText(text);
+    if (!result.ok) {
+      const looksLikeJson = /\.json$/i.test(file.name) || file.type === "application/json";
+      return result.error.code === "json_invalid" && !looksLikeJson
+        ? fail("json.notJson", { name: file.name })
+        : fail(`err.${result.error.code}`, result.error.params);
+    }
+    if (confirmReplace && !confirmReplace()) return false;
+    dispatch({ type: "loadRequirements", tender: result.tender, requirements: result.requirements });
+    dispatch({
+      type: "notify",
+      level: "success",
+      key: "json.loaded",
+      params: { count: result.requirements.length, id: result.tender.tender_id },
+    });
+    return true;
+  }, []);
+
+  /**
+   * Load a whole pack from a .zip: requirements.json from anywhere in the zip, and every file
+   * in a documents/ folder through the normal upload pipeline. Replaces the current work.
+   */
+  const loadPack = useCallback(
+    async (file, { confirmReplace } = {}) => {
+      if (!file) return false;
+      const fail = (key, params) => {
+        dispatch({ type: "requirementsError", error: { key, params, title: "zip.errorTitle" } });
+        return false;
+      };
+      const pack = await readPackZip(file);
+      if (!pack.ok) {
+        return fail(`zip.${pack.error.code}`, { size: { en: formatBytes(MAX_ZIP_BYTES, "en"), bn: formatBytes(MAX_ZIP_BYTES, "bn") } });
+      }
+      const result = parseRequirementsText(pack.requirementsText);
+      if (!result.ok) return fail(`err.${result.error.code}`, result.error.params);
+      if (confirmReplace && !confirmReplace()) return false;
+
+      epochRef.current += 1; // stop any upload still running for the old work
+      revokeAllPreviews();
+      dispatch({ type: "loadPack", tender: result.tender, requirements: result.requirements });
+      dispatch({
+        type: "notify",
+        level: "success",
+        key: "zip.loaded",
+        params: { id: result.tender.tender_id, count: pack.documents.length + pack.oversized.length },
+      });
+      for (const name of pack.oversized) dispatch({ type: "reject", code: "too_large", name });
+      await addFiles(pack.documents);
+      return true;
+    },
+    [addFiles],
+  );
 
   const removeFile = useCallback((fileId) => {
     revokePreview(fileId);
@@ -325,6 +371,7 @@ export function useTenderStore() {
   const actions = useMemo(
     () => ({
       loadRequirementsFile,
+      loadPack,
       addFiles,
       removeFile,
       assign,
@@ -337,7 +384,7 @@ export function useTenderStore() {
       dismissKind,
       reset,
     }),
-    [loadRequirementsFile, addFiles, removeFile, assign, unassign, setExpiry, setLang, packageGenerated, notify, dismiss, dismissKind, reset],
+    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, packageGenerated, notify, dismiss, dismissKind, reset],
   );
 
   return { state, derived, actions };

@@ -1,5 +1,5 @@
-import { useRef } from "react";
-import { CircleAlert, FileJson, FolderOpen, Lock } from "lucide-react";
+import { useRef, useState } from "react";
+import { CircleAlert, FileArchive, FileJson, FolderOpen, LoaderCircle, Lock } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
 import { splitPackFiles } from "../utils/dropFiles.js";
 import DropZone from "./DropZone.jsx";
@@ -9,10 +9,23 @@ export default function EmptyState() {
   const { t } = useI18n();
   const { state, actions } = useStore();
   const inputRef = useRef(null);
+  const zipRef = useRef(null);
+  const [opening, setOpening] = useState(false);
 
-  // Accepts requirements.json alone, or a whole dropped pack folder (json + documents).
+  const openPack = async (file) => {
+    setOpening(true);
+    try {
+      await actions.loadPack(file);
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  // Accepts requirements.json alone, a pack .zip, or a whole dropped pack folder (json + documents).
   const handleItems = async (items) => {
     if (!items.length) return;
+    const zip = items.find((item) => /\.zip$/i.test(item.path));
+    if (zip) return openPack(zip.file);
     const { requirementsFile, documents } = splitPackFiles(items);
     const jsonFile = requirementsFile ?? items.find((item) => /\.json$/i.test(item.path))?.file ?? items[0].file;
     const loaded = await actions.loadRequirementsFile(jsonFile);
@@ -56,11 +69,36 @@ export default function EmptyState() {
           </div>
         </DropZone>
 
+        <div className="mt-4 flex flex-col items-center gap-3 rounded-xl border border-slate-200 px-4 py-3.5 text-center sm:flex-row sm:justify-between sm:text-left">
+          <p className="text-sm text-slate-600">{t("zip.hint")}</p>
+          <button type="button" className="btn btn-secondary shrink-0" disabled={opening} onClick={() => zipRef.current?.click()}>
+            {opening ? (
+              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <FileArchive className="size-4" aria-hidden="true" />
+            )}
+            {opening ? t("zip.opening") : t("zip.button")}
+          </button>
+          <input
+            ref={zipRef}
+            type="file"
+            accept=".zip,application/zip,application/x-zip-compressed"
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) openPack(file);
+            }}
+          />
+        </div>
+
         {state.requirementsError && (
           <div role="alert" className="mt-5 flex gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
             <CircleAlert className="mt-0.5 size-5 shrink-0 text-red-600" aria-hidden="true" />
             <div>
-              <p className="font-semibold">{t("empty.errorTitle")}</p>
+              <p className="font-semibold">{t(state.requirementsError.title ?? "empty.errorTitle")}</p>
               <p className="mt-1">{t(state.requirementsError.key, state.requirementsError.params)}</p>
             </div>
           </div>

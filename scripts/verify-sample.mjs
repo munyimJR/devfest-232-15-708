@@ -7,12 +7,14 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import JSZip from "jszip";
 import { PDFDocument, PDFName, PDFArray, PDFRawStream } from "pdf-lib";
 import { parseRequirementsText } from "../src/utils/requirements.js";
 import { inspectIncomingFile } from "../src/utils/pdfFile.js";
 import { STATUS, buildChecklist, summarizeChecklist } from "../src/utils/status.js";
 import { FOOTER_HEIGHT, buildPackage, footerText } from "../src/utils/packageGenerator.js";
 import { todayLocalYmd } from "../src/utils/dates.js";
+import { readPackZip } from "../src/utils/zipPack.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const candidates = [process.argv[2], "test-data/sample-pack", "test-data/problem-pack/sample-pack"].filter(Boolean);
@@ -30,6 +32,8 @@ function check(ok, label, detail = "") {
 const section = (title) => console.log(`\n${title}`);
 
 console.log(`Sample pack: ${path.relative(root, packDir)}`);
+const outDir = path.join(root, "test-data", "out");
+fs.mkdirSync(outDir, { recursive: true });
 
 // ---------------------------------------------------------------- requirements
 section("requirements.json");
@@ -73,6 +77,37 @@ for (const [name, file] of Object.entries(accepted)) {
   const expected = createHash("sha256").update(file.bytes).digest("hex");
   if (file.hash !== expected) check(false, `SHA-256 of ${name} matches Node crypto`);
 }
+
+// ---------------------------------------------------------------- zip pack
+section("ZIP pack");
+const zip = new JSZip();
+zip.file("sample-pack/requirements.json", fs.readFileSync(path.join(packDir, "requirements.json")));
+zip.file("sample-pack/README.txt", "not a document");
+for (const name of fs.readdirSync(docDir)) zip.file(`sample-pack/documents/${name}`, fs.readFileSync(path.join(docDir, name)));
+zip.file("__MACOSX/sample-pack/documents/._scan_0042.pdf", "resource fork");
+zip.file("sample-pack/documents/.DS_Store", "finder junk");
+const zipBytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+fs.writeFileSync(path.join(outDir, "sample-pack.zip"), zipBytes);
+const pack = await readPackZip(new File([zipBytes], "sample-pack.zip"));
+check(pack.ok && parseRequirementsText(pack.requirementsText).ok, "requirements.json is found inside a sub-folder of the zip");
+const zipNames = pack.ok ? pack.documents.map((d) => d.name).sort() : [];
+check(
+  JSON.stringify(zipNames) === JSON.stringify(fs.readdirSync(docDir).sort()),
+  "only the documents/ files are taken (README, __MACOSX and dot-files ignored)",
+  zipNames.join(", "),
+);
+const zipResults = {};
+let zipExisting = { count: 0, totalBytes: 0 };
+for (const doc of pack.ok ? pack.documents : []) {
+  const result = await inspectIncomingFile(doc, zipExisting);
+  zipResults[doc.name] = result.ok ? result.file.hash : result.error.code;
+  if (result.ok) zipExisting = { count: zipExisting.count + 1, totalBytes: zipExisting.totalBytes + result.file.size };
+}
+check(
+  zipResults["company_logo.png"] === "not_pdf" &&
+    Object.entries(accepted).every(([name, file]) => zipResults[name] === file.hash),
+  "zip documents go through the same pipeline with the same results",
+);
 
 // ---------------------------------------------------------------- statuses
 section("Status engine");
@@ -193,8 +228,6 @@ check(
 check(cropOk, `every page's CropBox is ${FOOTER_HEIGHT}pt taller than its source and inside the MediaBox`);
 check(footerOk, `every page has the footer "${footerText(tender.tender_id, "N", pkgPages.length)}"`);
 
-const outDir = path.join(root, "test-data", "out");
-fs.mkdirSync(outDir, { recursive: true });
 const outFile = path.join(outDir, `${tender.tender_id}_Package.pdf`);
 fs.writeFileSync(outFile, packageBytes);
 console.log(`\nWrote ${path.relative(root, outFile)} (${(packageBytes.length / 1024).toFixed(1)} KB)`);

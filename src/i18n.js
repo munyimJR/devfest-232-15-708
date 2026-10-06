@@ -30,6 +30,16 @@ const en = {
   "json.notJson": "{name} is not a .json file. Please choose requirements.json.",
   "json.errorTitle": "requirements.json could not be loaded",
 
+  "zip.button": "Load pack (.zip)",
+  "zip.hint": "Have the whole pack as one .zip (requirements.json + documents folder)?",
+  "zip.opening": "Opening pack…",
+  "zip.loaded": "Pack loaded: tender {id}, {count} files found in the documents folder.",
+  "zip.errorTitle": "The pack could not be loaded",
+  "zip.zip_invalid": "This .zip file could not be opened. It may be damaged.",
+  "zip.zip_no_requirements": "No requirements.json was found inside the .zip file.",
+  "zip.zip_too_large": "The .zip file is too large (maximum {size}).",
+  "confirm.replacePack": "Load this pack? The current tender, files, matches and dates will be replaced.",
+
   "err.json_unreadable": "The file could not be read.",
   "err.json_empty": "The file is empty.",
   "err.json_invalid": "This file is not valid JSON. Please check that you chose the right requirements.json.",
@@ -192,6 +202,16 @@ const bn = {
   "json.loaded": "টেন্ডার {id}-এর {count}টি নথির তালিকা লোড হয়েছে।",
   "json.notJson": "{name} কোনো .json ফাইল নয়। requirements.json বেছে নিন।",
   "json.errorTitle": "requirements.json লোড করা যায়নি",
+
+  "zip.button": "প্যাক লোড করুন (.zip)",
+  "zip.hint": "পুরো প্যাকটি কি একটি .zip ফাইলে আছে (requirements.json + documents ফোল্ডার)?",
+  "zip.opening": "প্যাক খোলা হচ্ছে…",
+  "zip.loaded": "প্যাক লোড হয়েছে: টেন্ডার {id}, documents ফোল্ডারে {count}টি ফাইল পাওয়া গেছে।",
+  "zip.errorTitle": "প্যাকটি লোড করা যায়নি",
+  "zip.zip_invalid": "এই .zip ফাইলটি খোলা যায়নি। ফাইলটি নষ্ট হতে পারে।",
+  "zip.zip_no_requirements": ".zip ফাইলের ভেতরে কোনো requirements.json পাওয়া যায়নি।",
+  "zip.zip_too_large": ".zip ফাইলটি অনেক বড় (সর্বোচ্চ {size})।",
+  "confirm.replacePack": "এই প্যাকটি লোড করবেন? বর্তমান টেন্ডার, ফাইল, মিল ও তারিখ বদলে যাবে।",
 
   "err.json_unreadable": "ফাইলটি পড়া যায়নি।",
   "err.json_empty": "ফাইলটি খালি।",

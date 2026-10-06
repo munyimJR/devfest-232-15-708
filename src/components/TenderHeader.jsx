@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { CalendarClock, FileJson, RotateCcw } from "lucide-react";
+import { CalendarClock, FileArchive, FileJson, RotateCcw } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
 import { daysBetween, todayLocalYmd } from "../utils/dates.js";
 
@@ -28,6 +28,12 @@ export default function TenderHeader() {
   const { state, actions } = useStore();
   const { tender } = state;
   const inputRef = useRef(null);
+  const zipRef = useRef(null);
+
+  const openPack = (file) => {
+    const hasWork = state.files.length > 0 || Object.keys(state.matches).length > 0;
+    actions.loadPack(file, { confirmReplace: hasWork ? () => window.confirm(t("confirm.replacePack")) : undefined });
+  };
 
   const replaceRequirements = (file) => {
     const hasWork = Object.keys(state.matches).length > 0 || Object.keys(state.expiry).length > 0;
@@ -59,6 +65,10 @@ export default function TenderHeader() {
             <FileJson className="size-4" aria-hidden="true" />
             {t("tender.loadOther")}
           </button>
+          <button type="button" className="btn btn-secondary" onClick={() => zipRef.current?.click()}>
+            <FileArchive className="size-4" aria-hidden="true" />
+            {t("zip.button")}
+          </button>
           <button type="button" className="btn btn-ghost" onClick={startOver}>
             <RotateCcw className="size-4" aria-hidden="true" />
             {t("tender.startOver")}
@@ -74,6 +84,19 @@ export default function TenderHeader() {
               const file = event.target.files?.[0];
               event.target.value = "";
               if (file) replaceRequirements(file);
+            }}
+          />
+          <input
+            ref={zipRef}
+            type="file"
+            accept=".zip,application/zip,application/x-zip-compressed"
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) openPack(file);
             }}
           />
         </div>
