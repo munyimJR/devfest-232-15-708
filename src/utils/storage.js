@@ -5,6 +5,7 @@
 
 import { validateRequirements } from "./requirements.js";
 import { isValidYmd } from "./dates.js";
+import { hasPngSignature, pngSize } from "./seal.js";
 
 const DB_NAME = "tenderpack";
 const DB_VERSION = 1;
@@ -116,6 +117,8 @@ export function sessionFromState(state) {
     expiry: state.expiry,
     suggested: state.suggested,
     options: state.options,
+    seal: state.seal,
+    sealPages: state.sealPages,
   };
 }
 
@@ -170,5 +173,11 @@ export function sanitizeSavedWork(saved, defaultOptions = {}) {
   for (const [name, value] of Object.entries(session.options ?? {})) {
     if (name in defaultOptions && typeof value === typeof defaultOptions[name]) options[name] = value;
   }
-  return { tender: parsed.tender, requirements: parsed.requirements, files, matches, expiry, suggested, options };
+  const savedSeal = session.seal;
+  const seal =
+    savedSeal && savedSeal.bytes instanceof Uint8Array && hasPngSignature(savedSeal.bytes)
+      ? { name: String(savedSeal.name ?? "seal.png"), bytes: savedSeal.bytes, ...pngSize(savedSeal.bytes) }
+      : null;
+  const sealPages = typeof session.sealPages === "string" ? session.sealPages.slice(0, 500) : "";
+  return { tender: parsed.tender, requirements: parsed.requirements, files, matches, expiry, suggested, options, seal, sealPages };
 }

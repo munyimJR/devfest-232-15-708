@@ -12,6 +12,7 @@ import RequirementChecklist from "./components/RequirementChecklist.jsx";
 import GeneratePanel from "./components/GeneratePanel.jsx";
 import Toasts from "./components/Toasts.jsx";
 import RestoredBanner from "./components/RestoredBanner.jsx";
+import SealPanel from "./components/SealPanel.jsx";
 import { LoaderCircle } from "lucide-react";
 
 /** Stop the browser from opening a file dropped outside a drop zone (that would lose all work). */
@@ -56,7 +57,10 @@ export default function App() {
                   <ReadinessSummary />
                 </div>
                 <div className="grid items-start gap-5 xl:grid-cols-[minmax(340px,380px)_minmax(0,1fr)]">
-                  <UploadZone />
+                  <div className="space-y-5">
+                    <UploadZone />
+                    <SealPanel />
+                  </div>
                   <RequirementChecklist />
                 </div>
                 <GeneratePanel />

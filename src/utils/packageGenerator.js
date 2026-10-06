@@ -8,6 +8,7 @@
 
 import { PDFDocument, PDFHexString, PDFName, StandardFonts, degrees, rgb } from "pdf-lib";
 import { safeText } from "./pdfText.js";
+import { sealPlacement } from "./seal.js";
 
 export const FOOTER_HEIGHT = 28;
 export const A4 = { width: 595.28, height: 841.89 };
@@ -76,9 +77,18 @@ export function documentStartPages(pageCounts, { includeIndex = false } = {}) {
  * @param {object} [args.banglaLabels] { [requirementId]: { png, width, height, baseline, fontSizePx } }
  *   PNG images of the Bangla titles (rendered by the UI), shown next to the English names on
  *   the index page
+ * @param {object} [args.seal] { png, pages, position, width }: a seal / signature image stamped
+ *   on these final package page numbers (never on the cover or index page)
  * @returns {Promise<Uint8Array>}
  */
-export async function buildPackage({ tender, includedDocs, createdDate, includeIndex = false, banglaLabels = null }) {
+export async function buildPackage({
+  tender,
+  includedDocs,
+  createdDate,
+  includeIndex = false,
+  banglaLabels = null,
+  seal = null,
+}) {
   const out = await PDFDocument.create();
   const fonts = {
     regular: await out.embedFont(StandardFonts.Helvetica),
@@ -143,6 +153,10 @@ export async function buildPackage({ tender, includedDocs, createdDate, includeI
   }
 
   const pages = out.getPages();
+  if (seal?.png && seal.pages?.length) {
+    const firstDocPage = (includeIndex ? 2 : 1) + 1; // after the cover (and index)
+    stampSeal(pages, await embedSeal(out, seal.png), seal, firstDocPage);
+  }
   for (const link of coverLinks) addLink(out, cover, link.rect, pages[entries[link.entry].startPage - 1]);
   for (const link of indexLinks) addLink(out, indexPage, link.rect, pages[entries[link.entry].startPage - 1]);
   addOutline(out, [
@@ -431,6 +445,34 @@ function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
     page.drawText(`... and ${hidden} more`, { x: textX, y, size, font: regular, color: COLORS.muted });
   }
   return links;
+}
+
+// ---------------------------------------------------------------------------
+// Seal / signature
+// ---------------------------------------------------------------------------
+
+async function embedSeal(doc, png) {
+  try {
+    return await doc.embedPng(png);
+  } catch {
+    throw new PackageError("seal_unreadable");
+  }
+}
+
+/**
+ * Stamp the seal on each chosen page inside the original page area (the footer strip is added
+ * later, so it never covers the seal). Pages before `firstDocPage` (cover / index) are skipped.
+ */
+function stampSeal(pages, image, seal, firstDocPage) {
+  const width = Math.min(Math.max(Number(seal.width) || 110, 20), 600);
+  const height = (width * image.height) / image.width;
+  for (const pageNumber of new Set(seal.pages)) {
+    if (!Number.isInteger(pageNumber) || pageNumber < firstDocPage || pageNumber > pages.length) continue;
+    const page = pages[pageNumber - 1];
+    const rotation = normalizeRotation(page.getRotation().angle);
+    const place = sealPlacement(visibleBox(page), rotation, seal.position, width, height);
+    page.drawImage(image, { x: place.x, y: place.y, width: place.width, height: place.height, rotate: degrees(place.rotate) });
+  }
 }
 
 // ---------------------------------------------------------------------------

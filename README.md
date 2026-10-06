@@ -51,6 +51,11 @@ The generated PDF is always in English.
   starts; the cover shows start pages too. Entries are clickable and the PDF has bookmarks.
 - **Export checklist (CSV)**: order, document, required, file name, pages, expiry date and status
   in the current language, saved as `<tender_id>_Checklist.csv` (UTF-8 with BOM, opens in Excel).
+- **Seal or signature** (optional): upload a PNG and stamp it on chosen package pages, typed as
+  `3, 8-13` or picked with *Last page of each document* / *All document pages*. The panel shows
+  exactly which document pages that means. Choose a corner and a width (60-180 pt); the seal keeps
+  its aspect ratio, sits inside the original page area, stays upright on rotated pages and is
+  never placed on the cover or index.
 - **Save and reopen**: your work (requirements, files, matches, dates, options) is saved in this
   browser's IndexedDB after every change and restored when you come back. *Start over* clears it.
 
@@ -99,6 +104,8 @@ src/
   utils/autoMatch.js          suggest matches from file names
   utils/csv.js                checklist CSV export
   utils/storage.js            IndexedDB save / restore
+  utils/seal.js               seal PNG checks, page selection, placement
+  utils/banglaText.js         Bangla names rendered to PNG (canvas) for the index page
   components/                 UI
 tests/                        vitest unit tests
 scripts/verify-sample.mjs     sample-pack smoke test

@@ -10,12 +10,14 @@ import { revokeAllPreviews, revokePreview } from "../utils/download.js";
 import { MAX_ZIP_BYTES, readPackZip } from "../utils/zipPack.js";
 import { suggestMatches } from "../utils/autoMatch.js";
 import { clearSavedWork, loadSavedWork, sanitizeSavedWork, saveWork, sessionFromState } from "../utils/storage.js";
+import { inspectSealImage, parsePageSelection } from "../utils/seal.js";
+import { documentStartPages } from "../utils/packageGenerator.js";
 
 const MAX_MESSAGES = 100;
 
 const SIZE_LIMIT_PARAM = { en: formatBytes(MAX_TOTAL_BYTES, "en"), bn: formatBytes(MAX_TOTAL_BYTES, "bn") };
 
-export const DEFAULT_OPTIONS = { includeIndex: true };
+export const DEFAULT_OPTIONS = { includeIndex: true, sealPosition: "bottom-right", sealWidth: 110 };
 
 export function createInitialState(lang = "en", options = DEFAULT_OPTIONS, hydrated = false) {
   return {
@@ -27,6 +29,8 @@ export function createInitialState(lang = "en", options = DEFAULT_OPTIONS, hydra
     matches: {}, // { [requirementId]: fileId }
     expiry: {}, // { [requirementId]: "YYYY-MM-DD" }
     suggested: {}, // { [requirementId]: fileId } auto-matched, not yet checked by the user
+    seal: null, // { name, bytes, width, height } PNG seal / signature image
+    sealPages: "", // package page numbers for the seal, e.g. "3, 8-13"
     lang,
     options, // package options (kept when a new pack is loaded)
     messages: [], // { id, kind: "toast" | "rejection", level, key, params }
@@ -76,6 +80,7 @@ export function reducer(state, action) {
         matches: {},
         expiry: {},
         suggested: {},
+        sealPages: "",
         requirementsError: null,
       };
 
@@ -84,6 +89,7 @@ export function reducer(state, action) {
       return {
         ...createInitialState(state.lang, state.options, true),
         seq: state.seq,
+        seal: state.seal,
         tender: action.tender,
         requirements: action.requirements,
         messages: state.messages.filter((m) => m.kind === "toast"),
@@ -229,6 +235,15 @@ export function reducer(state, action) {
     case "dismissRestored":
       return { ...state, restored: false };
 
+    case "setSeal":
+      return { ...state, seal: action.seal };
+
+    case "removeSeal":
+      return { ...state, seal: null };
+
+    case "setSealPages":
+      return { ...state, sealPages: action.value };
+
     case "setOption":
       return { ...state, options: { ...state.options, [action.name]: action.value } };
 
@@ -303,7 +318,18 @@ export function useTenderStore() {
     }, 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.hydrated, state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.options]);
+  }, [
+    state.hydrated,
+    state.tender,
+    state.requirements,
+    state.files,
+    state.matches,
+    state.expiry,
+    state.suggested,
+    state.options,
+    state.seal,
+    state.sealPages,
+  ]);
 
   const notify = useCallback((level, key, params) => dispatch({ type: "notify", level, key, params }), []);
 
@@ -427,6 +453,18 @@ export function useTenderStore() {
   const setLang = useCallback((lang) => dispatch({ type: "setLang", lang }), []);
   const autoMatch = useCallback(() => dispatch({ type: "autoMatch" }), []);
   const setOption = useCallback((name, value) => dispatch({ type: "setOption", name, value }), []);
+  const setSealPages = useCallback((value) => dispatch({ type: "setSealPages", value }), []);
+  const removeSeal = useCallback(() => dispatch({ type: "removeSeal" }), []);
+  const setSealFile = useCallback(async (file) => {
+    if (!file) return false;
+    const result = await inspectSealImage(file);
+    if (!result.ok) {
+      dispatch({ type: "notify", level: "error", key: `seal.${result.error.code}`, params: result.error.params });
+      return false;
+    }
+    dispatch({ type: "setSeal", seal: result.seal });
+    return true;
+  }, []);
   const confirmSuggestion = useCallback((reqId) => dispatch({ type: "confirmSuggestion", reqId }), []);
   const confirmAllSuggestions = useCallback(() => dispatch({ type: "confirmAllSuggestions" }), []);
   const packageGenerated = useCallback((info) => dispatch({ type: "packageGenerated", info }), []);
@@ -459,13 +497,30 @@ export function useTenderStore() {
     // Cover page (+ index page) + every page of every included document.
     const frontPages = state.options.includeIndex ? 2 : 1;
     const packagePages = summary.included.length ? summary.documentPages + frontPages : 0;
+    const startPages = documentStartPages(
+      summary.included.map((row) => row.file.pages),
+      { includeIndex: state.options.includeIndex },
+    );
+    const packageDocs = summary.included.map((row, index) => ({ req: row.req, startPage: startPages[index], pages: row.file.pages }));
+
+    // Seal: the page choice is checked against the current package layout.
+    let sealSelection = null;
+    if (state.seal && state.sealPages.trim()) {
+      sealSelection = packageDocs.length
+        ? parsePageSelection(state.sealPages, { total: packagePages, firstDocPage: frontPages + 1 })
+        : { ok: false, error: { code: "no_docs", params: {} } };
+    }
+    const sealIssue = sealSelection && !sealSelection.ok ? sealSelection.error : null;
+    const sealPageList = sealSelection?.ok ? sealSelection.pages : [];
+    const readyToGenerate = summary.canGenerate && !sealIssue;
     // Everything that changes the package content; a stored package with another signature is out of date.
     const packageSignature = JSON.stringify([
       state.tender,
       state.options,
       summary.included.map((row) => [row.req.id, row.req.title_en, row.file.id]),
+      state.seal ? [state.seal.name, state.seal.bytes.length, sealPageList] : null,
     ]);
-    const packageFresh = Boolean(state.lastPackage) && state.lastPackage.signature === packageSignature && summary.canGenerate;
+    const packageFresh = Boolean(state.lastPackage) && state.lastPackage.signature === packageSignature && readyToGenerate;
     // A suggestion shows only while the auto-matched file is still the match.
     const suggestedReqIds = new Set(
       Object.entries(state.suggested)
@@ -482,12 +537,16 @@ export function useTenderStore() {
       totalBytes,
       requirementsById,
       packagePages,
+      packageDocs,
       packageSignature,
       packageFresh,
+      sealIssue,
+      sealPageList,
+      readyToGenerate,
       suggestedReqIds,
       canAutoMatch,
     };
-  }, [state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.options, state.lastPackage]);
+  }, [state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.options, state.seal, state.sealPages, state.lastPackage]);
 
   const actions = useMemo(
     () => ({
@@ -501,6 +560,9 @@ export function useTenderStore() {
       setLang,
       autoMatch,
       setOption,
+      setSealFile,
+      setSealPages,
+      removeSeal,
       confirmSuggestion,
       confirmAllSuggestions,
       packageGenerated,
@@ -510,7 +572,7 @@ export function useTenderStore() {
       reset,
       dismissRestored,
     }),
-    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset, dismissRestored],
+    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, setSealFile, setSealPages, removeSeal, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset, dismissRestored],
   );
 
   return { state, derived, actions };

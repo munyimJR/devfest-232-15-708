@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SAVE_VERSION, sanitizeSavedWork, sessionFromState } from "../src/utils/storage.js";
+import { makePng } from "./helpers.js";
 
 const tender = { tender_id: "T-1", title: "T", procuring_entity: "E", bidder: "B", submission_deadline: "2026-12-01" };
 const requirements = [
@@ -14,8 +15,11 @@ const state = {
   matches: { R1: "a", R2: "b" },
   expiry: { R1: "2027-01-31" },
   suggested: { R2: "b" },
-  options: { includeIndex: false },
+  options: { includeIndex: false, sealPosition: "top-right", sealWidth: 90 },
+  seal: { name: "seal.png", bytes: makePng(4, 2), width: 4, height: 2 },
+  sealPages: "3, 4-5",
 };
+const defaults = { includeIndex: true, sealPosition: "bottom-right", sealWidth: 110 };
 
 describe("saved work", () => {
   it("round-trips the saved parts of the state", () => {
@@ -23,8 +27,13 @@ describe("saved work", () => {
     expect(session.version).toBe(SAVE_VERSION);
     expect(session.fileIds).toEqual(["a", "b"]);
     expect(session).not.toHaveProperty("files");
-    const restored = sanitizeSavedWork({ session, files: state.files }, { includeIndex: true });
+    const restored = sanitizeSavedWork({ session, files: state.files }, defaults);
     expect(restored).toEqual({ ...state, files: state.files });
+  });
+
+  it("drops a saved seal that is not a PNG", () => {
+    const session = { ...sessionFromState(state), seal: { name: "x.png", bytes: new Uint8Array([1, 2, 3]) } };
+    expect(sanitizeSavedWork({ session, files: state.files }, defaults).seal).toBe(null);
   });
 
   it("keeps file order and drops matches to files that are gone", () => {
@@ -52,6 +61,6 @@ describe("saved work", () => {
 
   it("only restores known options with the right type", () => {
     const session = { ...sessionFromState(state), options: { includeIndex: "yes", evil: true } };
-    expect(sanitizeSavedWork({ session, files: state.files }, { includeIndex: true }).options).toEqual({ includeIndex: true });
+    expect(sanitizeSavedWork({ session, files: state.files }, defaults).options).toEqual(defaults);
   });
 });

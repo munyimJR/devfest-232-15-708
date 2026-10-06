@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CircleCheck, Download, ExternalLink, FileDown, Info, LoaderCircle } from "lucide-react";
+import { CircleAlert, CircleCheck, Download, ExternalLink, FileDown, Info, LoaderCircle } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
 import { buildPackage } from "../utils/packageGenerator.js";
 import { downloadBytes, openPdfInNewTab, packageFileName, revokePreview } from "../utils/download.js";
@@ -13,15 +13,15 @@ const nextPaint = () => new Promise((resolve) => setTimeout(resolve, 40));
 export default function GeneratePanel() {
   const { t } = useI18n();
   const { state, derived, actions } = useStore();
-  const { summary, packagePages, packageFresh } = derived;
+  const { summary, packagePages, packageFresh, sealIssue, sealPageList, readyToGenerate } = derived;
   const [busy, setBusy] = useState(false);
 
   const blocking = summary.blocking;
-  const ready = summary.canGenerate;
+  const ready = readyToGenerate;
   const lastPackage = state.lastPackage;
 
   const generate = async () => {
-    if (!summary.canGenerate || busy) return;
+    if (!readyToGenerate || busy) return;
     setBusy(true);
     try {
       await nextPaint(); // let the spinner show before the CPU-heavy work starts
@@ -44,6 +44,15 @@ export default function GeneratePanel() {
         createdDate: todayLocalYmd(),
         includeIndex: state.options.includeIndex,
         banglaLabels,
+        seal:
+          state.seal && sealPageList.length
+            ? {
+                png: state.seal.bytes,
+                pages: sealPageList,
+                position: state.options.sealPosition,
+                width: state.options.sealWidth,
+              }
+            : null,
       });
       const fileName = packageFileName(state.tender.tender_id);
       downloadBytes(bytes, fileName);
@@ -59,6 +68,7 @@ export default function GeneratePanel() {
     } catch (error) {
       console.error("Package generation failed:", error);
       if (error?.code === "doc_unreadable") actions.notify("error", "gen.errorDoc", error.params);
+      else if (error?.code === "seal_unreadable") actions.notify("error", "gen.errorSeal");
       else actions.notify("error", "gen.error");
     } finally {
       setBusy(false);
@@ -79,10 +89,24 @@ export default function GeneratePanel() {
         <div className="min-w-0 flex-1" aria-live="polite">
           {blocking.length > 0 ? (
             <BlockingIssues rows={blocking} headingId="generate-heading" />
-          ) : !ready ? (
+          ) : !summary.canGenerate ? (
             <p id="generate-heading" className="flex items-center gap-2 font-semibold text-slate-700">
               <Info className="size-5 shrink-0 text-slate-500" aria-hidden="true" />
               {t("gen.noDocs")}
+            </p>
+          ) : sealIssue ? (
+            <p id="generate-heading" className="flex items-start gap-2 font-semibold text-red-800">
+              <CircleAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+              <span>
+                {t("gen.sealIssue", { error: t(`seal.err.${sealIssue.code}`, sealIssue.params) })}{" "}
+                <button
+                  type="button"
+                  className="font-semibold text-brand-800 underline underline-offset-2"
+                  onClick={() => document.getElementById("seal-pages")?.focus()}
+                >
+                  {t("gen.sealFix")}
+                </button>
+              </span>
             </p>
           ) : (
             <div>
@@ -92,6 +116,7 @@ export default function GeneratePanel() {
               </p>
               <p className="mt-1 text-sm text-slate-600">
                 {t(state.options.includeIndex ? "gen.readyNoteIndex" : "gen.readyNote")}
+                {sealPageList.length > 0 && ` ${t("gen.sealNote", { count: sealPageList.length })}`}
               </p>
               {lastPackage && !packageFresh && <p className="mt-1 text-sm font-medium text-amber-800">{t("gen.stale")}</p>}
             </div>

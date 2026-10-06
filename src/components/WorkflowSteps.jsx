@@ -12,7 +12,7 @@ const STYLES = {
 /** Visual only: 1 Tender -> 2 Documents -> 3 Review -> 4 Generate. */
 export default function WorkflowSteps() {
   const { t, num } = useI18n();
-  const { rows, summary, packageFresh } = useStore().derived;
+  const { rows, summary, packageFresh, readyToGenerate } = useStore().derived;
 
   const anyMissing = rows.some((row) => row.status === STATUS.MISSING);
   const anyDateProblem = rows.some((row) => row.status === STATUS.EXPIRED || row.status === STATUS.EXPIRY_NEEDED);
@@ -23,7 +23,7 @@ export default function WorkflowSteps() {
   if (anyDateProblem) states.push("problem");
   else states.push(documentsDone ? "done" : "upcoming");
   if (packageFresh) states.push("done");
-  else states.push(summary.canGenerate ? "current" : "upcoming");
+  else states.push(readyToGenerate ? "current" : "upcoming");
 
   const steps = ["steps.tender", "steps.documents", "steps.review", "steps.generate"].map((key, index) => ({
     key,
