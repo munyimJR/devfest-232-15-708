@@ -8,6 +8,7 @@ import { parseRequirementsText } from "../utils/requirements.js";
 import { buildChecklist, fileUsage, findDuplicates, summarizeChecklist } from "../utils/status.js";
 import { revokeAllPreviews, revokePreview } from "../utils/download.js";
 import { MAX_ZIP_BYTES, readPackZip } from "../utils/zipPack.js";
+import { suggestMatches } from "../utils/autoMatch.js";
 
 const MAX_MESSAGES = 100;
 
@@ -20,6 +21,7 @@ export function createInitialState(lang = "en") {
     files: [], // { id, name, size, pages, hash, bytes }
     matches: {}, // { [requirementId]: fileId }
     expiry: {}, // { [requirementId]: "YYYY-MM-DD" }
+    suggested: {}, // { [requirementId]: fileId } auto-matched, not yet checked by the user
     lang,
     messages: [], // { id, kind: "toast" | "rejection", level, key, params }
     processing: [], // files being read right now: { id, name }
@@ -49,6 +51,14 @@ function dropMatch(matches, expiry, reqId) {
   delete expiry[reqId];
 }
 
+/** Suggestions for the given requirements are settled (changed or confirmed by the user). */
+function withoutSuggestions(suggested, reqIds) {
+  if (!reqIds.some((id) => id in suggested)) return suggested;
+  const next = { ...suggested };
+  for (const id of reqIds) delete next[id];
+  return next;
+}
+
 export function reducer(state, action) {
   switch (action.type) {
     case "loadRequirements":
@@ -59,6 +69,7 @@ export function reducer(state, action) {
         requirements: action.requirements,
         matches: {},
         expiry: {},
+        suggested: {},
         requirementsError: null,
       };
 
@@ -101,10 +112,20 @@ export function reducer(state, action) {
       if (!state.files.some((f) => f.id === action.fileId)) return state;
       const matches = { ...state.matches };
       const expiry = { ...state.expiry };
+      const affected = [];
       for (const [reqId, fileId] of Object.entries(state.matches)) {
-        if (fileId === action.fileId) dropMatch(matches, expiry, reqId);
+        if (fileId === action.fileId) {
+          dropMatch(matches, expiry, reqId);
+          affected.push(reqId);
+        }
       }
-      return { ...state, files: state.files.filter((f) => f.id !== action.fileId), matches, expiry };
+      return {
+        ...state,
+        files: state.files.filter((f) => f.id !== action.fileId),
+        matches,
+        expiry,
+        suggested: withoutSuggestions(state.suggested, affected),
+      };
     }
 
     case "assign": {
@@ -142,7 +163,12 @@ export function reducer(state, action) {
       if (matches[reqId]) delete expiry[reqId];
       matches[reqId] = fileId;
 
-      const next = { ...state, matches, expiry };
+      const next = {
+        ...state,
+        matches,
+        expiry,
+        suggested: withoutSuggestions(state.suggested, movedFrom ? [reqId, movedFrom] : [reqId]),
+      };
       if (!movedFrom) return next;
       return pushMessage(next, {
         kind: "toast",
@@ -157,7 +183,7 @@ export function reducer(state, action) {
       const matches = { ...state.matches };
       const expiry = { ...state.expiry };
       dropMatch(matches, expiry, action.reqId);
-      return { ...state, matches, expiry };
+      return { ...state, matches, expiry, suggested: withoutSuggestions(state.suggested, [action.reqId]) };
     }
 
     case "setExpiry": {
@@ -168,6 +194,27 @@ export function reducer(state, action) {
       else delete expiry[reqId];
       return { ...state, expiry };
     }
+
+    case "autoMatch": {
+      const suggestions = suggestMatches({ requirements: state.requirements, files: state.files, matches: state.matches });
+      if (!suggestions.length) return pushMessage(state, { kind: "toast", level: "info", key: "auto.none" });
+      const matches = { ...state.matches };
+      const suggested = { ...state.suggested };
+      for (const { reqId, fileId } of suggestions) {
+        matches[reqId] = fileId;
+        suggested[reqId] = fileId;
+      }
+      return pushMessage(
+        { ...state, matches, suggested },
+        { kind: "toast", level: "success", key: "auto.done", params: { count: suggestions.length } },
+      );
+    }
+
+    case "confirmSuggestion":
+      return { ...state, suggested: withoutSuggestions(state.suggested, [action.reqId]) };
+
+    case "confirmAllSuggestions":
+      return { ...state, suggested: {} };
 
     case "setLang":
       return { ...state, lang: action.lang === "bn" ? "bn" : "en" };
@@ -332,6 +379,9 @@ export function useTenderStore() {
   const unassign = useCallback((reqId) => dispatch({ type: "unassign", reqId }), []);
   const setExpiry = useCallback((reqId, value) => dispatch({ type: "setExpiry", reqId, value }), []);
   const setLang = useCallback((lang) => dispatch({ type: "setLang", lang }), []);
+  const autoMatch = useCallback(() => dispatch({ type: "autoMatch" }), []);
+  const confirmSuggestion = useCallback((reqId) => dispatch({ type: "confirmSuggestion", reqId }), []);
+  const confirmAllSuggestions = useCallback(() => dispatch({ type: "confirmAllSuggestions" }), []);
   const packageGenerated = useCallback((info) => dispatch({ type: "packageGenerated", info }), []);
   const dismiss = useCallback((id) => dispatch({ type: "dismiss", id }), []);
   const dismissKind = useCallback((kind) => dispatch({ type: "dismissKind", kind }), []);
@@ -365,8 +415,28 @@ export function useTenderStore() {
       summary.included.map((row) => [row.req.id, row.req.title_en, row.file.id]),
     ]);
     const packageFresh = Boolean(state.lastPackage) && state.lastPackage.signature === packageSignature && summary.canGenerate;
-    return { rows, summary, duplicates, usage, totalBytes, requirementsById, packagePages, packageSignature, packageFresh };
-  }, [state.tender, state.requirements, state.files, state.matches, state.expiry, state.lastPackage]);
+    // A suggestion shows only while the auto-matched file is still the match.
+    const suggestedReqIds = new Set(
+      Object.entries(state.suggested)
+        .filter(([reqId, fileId]) => state.matches[reqId] === fileId)
+        .map(([reqId]) => reqId),
+    );
+    const canAutoMatch =
+      state.requirements.some((req) => !state.matches[req.id]) && state.files.some((file) => !usage.has(file.id));
+    return {
+      rows,
+      summary,
+      duplicates,
+      usage,
+      totalBytes,
+      requirementsById,
+      packagePages,
+      packageSignature,
+      packageFresh,
+      suggestedReqIds,
+      canAutoMatch,
+    };
+  }, [state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.lastPackage]);
 
   const actions = useMemo(
     () => ({
@@ -378,13 +448,16 @@ export function useTenderStore() {
       unassign,
       setExpiry,
       setLang,
+      autoMatch,
+      confirmSuggestion,
+      confirmAllSuggestions,
       packageGenerated,
       notify,
       dismiss,
       dismissKind,
       reset,
     }),
-    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, packageGenerated, notify, dismiss, dismissKind, reset],
+    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset],
   );
 
   return { state, derived, actions };

@@ -1,4 +1,4 @@
-import { CalendarDays, CircleAlert, CircleX } from "lucide-react";
+import { CalendarDays, Check, CircleAlert, CircleX, Sparkles } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
 import { STATUS } from "../utils/status.js";
 import ExpiryInput from "./ExpiryInput.jsx";
@@ -16,8 +16,9 @@ const ACCENT = {
 /** One requirement: order · title · Required/Optional · file select · expiry · status. */
 export default function RequirementRow({ row }) {
   const { t, title, date, num } = useI18n();
-  const { state } = useStore();
+  const { state, derived, actions } = useStore();
   const { req, file, expiryDate, status } = row;
+  const suggested = derived.suggestedReqIds.has(req.id);
   const deadline = state.tender.submission_deadline;
 
   let hint = null;
@@ -35,7 +36,9 @@ export default function RequirementRow({ row }) {
   return (
     <li
       id={`req-${req.id}`}
-      className={`relative scroll-mt-6 px-4 py-3 before:absolute before:inset-y-0 before:left-0 before:w-1 ${ACCENT[status]}`}
+      className={`relative scroll-mt-6 px-4 py-3 before:absolute before:inset-y-0 before:left-0 before:w-1 ${ACCENT[status]} ${
+        suggested ? "bg-violet-50/50" : ""
+      }`}
     >
       <div className="req-grid">
         <span
@@ -67,6 +70,23 @@ export default function RequirementRow({ row }) {
         </div>
         <div className="req-file min-w-0">
           <MatchSelect req={req} fileId={file?.id} describedBy={hintId} />
+          {suggested && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center gap-1 rounded-md bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-900 ring-1 ring-violet-300/70 ring-inset">
+                <Sparkles className="size-3" aria-hidden="true" />
+                {t("auto.tag")}
+              </span>
+              <button
+                type="button"
+                onClick={() => actions.confirmSuggestion(req.id)}
+                aria-label={t("auto.confirmAria", { title: title(req) })}
+                className="inline-flex items-center gap-1 rounded-md bg-white px-1.5 py-0.5 text-xs font-semibold text-brand-800 ring-1 ring-brand-300 ring-inset hover:bg-brand-50"
+              >
+                <Check className="size-3" strokeWidth={3} aria-hidden="true" />
+                {t("auto.confirm")}
+              </button>
+            </div>
+          )}
         </div>
         <div className="req-expiry min-w-0">
           {req.has_expiry && file ? (

@@ -141,6 +141,16 @@ const en = {
   "expiry.label": "Expiry Date",
   "expiry.aria": "Expiry date for {title}",
 
+  "auto.button": "Auto-match files",
+  "auto.hint": "Match documents that have no file yet by comparing file names with document names",
+  "auto.done_one": "{count} file matched automatically. Please check it.",
+  "auto.done_other": "{count} files matched automatically. Please check them.",
+  "auto.none": "No more files could be matched from their names. Please choose them by hand.",
+  "auto.tag": "Suggested — please check",
+  "auto.confirm": "Confirm",
+  "auto.confirmAria": "Confirm the suggested file for {title}",
+  "auto.confirmAll": "Confirm all suggestions",
+
   "match.label": "Select PDF file",
   "match.aria": "Select PDF file for {title}",
   "match.none": "— No file —",
@@ -310,6 +320,15 @@ const bn = {
   "expiry.notNeeded": "প্রয়োজন নেই",
   "expiry.label": "মেয়াদ শেষের তারিখ",
   "expiry.aria": "{title}-এর মেয়াদ শেষের তারিখ",
+
+  "auto.button": "ফাইল স্বয়ংক্রিয়ভাবে মেলান",
+  "auto.hint": "ফাইলের নাম ও নথির নাম মিলিয়ে যে নথিগুলোর ফাইল এখনো বেছে নেওয়া হয়নি সেগুলো মেলায়",
+  "auto.done": "{count}টি ফাইল স্বয়ংক্রিয়ভাবে মেলানো হয়েছে। অনুগ্রহ করে যাচাই করুন।",
+  "auto.none": "নামের ভিত্তিতে আর কোনো ফাইল মেলানো যায়নি। অনুগ্রহ করে নিজে বেছে নিন।",
+  "auto.tag": "প্রস্তাবিত — অনুগ্রহ করে যাচাই করুন",
+  "auto.confirm": "নিশ্চিত করুন",
+  "auto.confirmAria": "{title}-এর প্রস্তাবিত ফাইল নিশ্চিত করুন",
+  "auto.confirmAll": "সব প্রস্তাব নিশ্চিত করুন",
 
   "match.label": "PDF ফাইল বেছে নিন",
   "match.aria": "{title}-এর জন্য PDF ফাইল বেছে নিন",
