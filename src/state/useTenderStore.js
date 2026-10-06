@@ -1,7 +1,7 @@
 // All app state in one reducer. Everything else (statuses, blocking list, duplicates,
 // counts, readiness) is derived with useMemo - never stored twice.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { formatBytes, loadSavedLang, saveLang } from "../i18n.js";
 import { MAX_FILES, MAX_TOTAL_BYTES, inspectIncomingFile } from "../utils/pdfFile.js";
 import { parseRequirementsText } from "../utils/requirements.js";
@@ -12,6 +12,7 @@ import { suggestMatches } from "../utils/autoMatch.js";
 import { clearSavedWork, loadSavedWork, sanitizeSavedWork, saveWork, sessionFromState } from "../utils/storage.js";
 import { inspectSealImage, parsePageSelection } from "../utils/seal.js";
 import { documentStartPages } from "../utils/packageGenerator.js";
+import { askAiForFile, loadRememberedKey, rememberKey } from "../utils/aiAssist.js";
 
 const MAX_MESSAGES = 100;
 
@@ -31,6 +32,7 @@ export function createInitialState(lang = "en", options = DEFAULT_OPTIONS, hydra
     suggested: {}, // { [requirementId]: fileId } auto-matched, not yet checked by the user
     seal: null, // { name, bytes, width, height } PNG seal / signature image
     sealPages: "", // package page numbers for the seal, e.g. "3, 8-13"
+    aiSuggestions: {}, // { [fileId]: { status, requirementId, expiryDate, reason, code } } (never saved)
     lang,
     options, // package options (kept when a new pack is loaded)
     messages: [], // { id, kind: "toast" | "rejection", level, key, params }
@@ -131,12 +133,15 @@ export function reducer(state, action) {
           affected.push(reqId);
         }
       }
+      const aiSuggestions = { ...state.aiSuggestions };
+      delete aiSuggestions[action.fileId];
       return {
         ...state,
         files: state.files.filter((f) => f.id !== action.fileId),
         matches,
         expiry,
         suggested: withoutSuggestions(state.suggested, affected),
+        aiSuggestions,
       };
     }
 
@@ -235,6 +240,34 @@ export function reducer(state, action) {
     case "dismissRestored":
       return { ...state, restored: false };
 
+    case "aiStatus":
+      return { ...state, aiSuggestions: { ...state.aiSuggestions, [action.fileId]: action.entry } };
+
+    case "aiClear": {
+      if (!(action.fileId in state.aiSuggestions)) return state;
+      const aiSuggestions = { ...state.aiSuggestions };
+      delete aiSuggestions[action.fileId];
+      return { ...state, aiSuggestions };
+    }
+
+    case "aiAccept": {
+      // Accept = the normal assign (all matching rules apply) + the expiry date if the AI found one.
+      const entry = state.aiSuggestions[action.fileId];
+      if (!entry?.requirementId) return state;
+      const req = state.requirements.find((r) => r.id === entry.requirementId);
+      if (!req) return state;
+      let next = reducer(state, { type: "assign", reqId: req.id, fileId: action.fileId });
+      if (next.matches[req.id] !== action.fileId) return next; // assign was refused (message already shown)
+      if (req.has_expiry && entry.expiryDate) next = reducer(next, { type: "setExpiry", reqId: req.id, value: entry.expiryDate });
+      const aiSuggestions = { ...next.aiSuggestions };
+      delete aiSuggestions[action.fileId];
+      const file = next.files.find((f) => f.id === action.fileId);
+      return pushMessage(
+        { ...next, aiSuggestions },
+        { kind: "toast", level: "success", key: "ai.accepted", params: { name: file?.name ?? "", title: titleOf(next, req.id) } },
+      );
+    }
+
     case "setSeal":
       return { ...state, seal: action.seal };
 
@@ -275,11 +308,21 @@ const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
 export function useTenderStore() {
   const [state, dispatch] = useReducer(reducer, undefined, () => createInitialState(loadSavedLang()));
 
-  // Latest files for the upload pipeline's limit checks.
+  // Latest files / requirements for async work (upload pipeline limits, AI requests).
   const filesRef = useRef(state.files);
+  const requirementsRef = useRef(state.requirements);
   useLayoutEffect(() => {
     filesRef.current = state.files;
+    requirementsRef.current = state.requirements;
   });
+
+  // AI help: the user's own API key lives only in memory (and sessionStorage if they ask).
+  const [apiKey, setApiKeyState] = useState(() => loadRememberedKey());
+  const [keyRemembered, setKeyRemembered] = useState(() => Boolean(loadRememberedKey()));
+  const apiKeyRef = useRef(apiKey);
+  apiKeyRef.current = apiKey;
+  const aiConsentRef = useRef(false);
+  const aiEpochRef = useRef(0);
 
   const queueRef = useRef(Promise.resolve());
   const epochRef = useRef(0); // bumped by reset() so a running upload batch stops
@@ -427,6 +470,7 @@ export function useTenderStore() {
       if (confirmReplace && !confirmReplace()) return false;
 
       epochRef.current += 1; // stop any upload still running for the old work
+      aiEpochRef.current += 1;
       revokeAllPreviews();
       dispatch({ type: "loadPack", tender: result.tender, requirements: result.requirements });
       dispatch({
@@ -473,11 +517,59 @@ export function useTenderStore() {
 
   const reset = useCallback(() => {
     epochRef.current += 1;
+    aiEpochRef.current += 1;
     revokeAllPreviews();
     clearSavedWork();
     dispatch({ type: "reset" });
   }, []);
   const dismissRestored = useCallback(() => dispatch({ type: "dismissRestored" }), []);
+
+  const setApiKey = useCallback((key, remember) => {
+    const value = String(key ?? "").trim();
+    setApiKeyState(value);
+    setKeyRemembered(Boolean(value) && remember);
+    rememberKey(remember ? value : "");
+  }, []);
+
+  /**
+   * Ask the AI about these files, one at a time. `confirmSend(count)` is asked once per
+   * session before the first file is sent to Anthropic.
+   */
+  const askAi = useCallback(async (fileIds, { confirmSend } = {}) => {
+    const ids = fileIds.filter((id) => filesRef.current.some((f) => f.id === id));
+    if (!ids.length) return;
+    if (!apiKeyRef.current) {
+      dispatch({ type: "notify", level: "error", key: "ai.noKey" });
+      return;
+    }
+    if (!aiConsentRef.current) {
+      if (confirmSend && !confirmSend(ids.length)) return;
+      aiConsentRef.current = true;
+    }
+    const epoch = aiEpochRef.current;
+    for (const fileId of ids) dispatch({ type: "aiStatus", fileId, entry: { status: "queued" } });
+    for (let i = 0; i < ids.length; i += 1) {
+      const fileId = ids[i];
+      const file = filesRef.current.find((f) => f.id === fileId);
+      if (!file || aiEpochRef.current !== epoch) continue;
+      dispatch({ type: "aiStatus", fileId, entry: { status: "loading" } });
+      const result = await askAiForFile({ apiKey: apiKeyRef.current, file, requirements: requirementsRef.current });
+      if (aiEpochRef.current !== epoch || !filesRef.current.some((f) => f.id === fileId)) continue;
+      dispatch({
+        type: "aiStatus",
+        fileId,
+        entry: result.ok ? { status: "done", ...result.suggestion } : { status: "error", code: result.error.code },
+      });
+      // A wrong key fails every request: stop instead of sending the remaining files.
+      if (!result.ok && result.error.code === "invalid_key") {
+        for (const rest of ids.slice(i + 1)) dispatch({ type: "aiClear", fileId: rest });
+        break;
+      }
+    }
+  }, []);
+
+  const acceptAi = useCallback((fileId) => dispatch({ type: "aiAccept", fileId }), []);
+  const dismissAi = useCallback((fileId) => dispatch({ type: "aiClear", fileId }), []);
 
   const derived = useMemo(() => {
     const totalBytes = state.files.reduce((sum, f) => sum + f.size, 0);
@@ -571,9 +663,15 @@ export function useTenderStore() {
       dismissKind,
       reset,
       dismissRestored,
+      setApiKey,
+      askAi,
+      acceptAi,
+      dismissAi,
     }),
-    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, setSealFile, setSealPages, removeSeal, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset, dismissRestored],
+    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, setSealFile, setSealPages, removeSeal, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset, dismissRestored, setApiKey, askAi, acceptAi, dismissAi],
   );
 
-  return { state, derived, actions };
+  const ai = useMemo(() => ({ apiKey, hasKey: Boolean(apiKey), keyRemembered }), [apiKey, keyRemembered]);
+
+  return { state, derived, actions, ai };
 }

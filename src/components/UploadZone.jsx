@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { CloudUpload, FilePlus2, FileWarning, X } from "lucide-react";
+import { CloudUpload, FilePlus2, FileWarning, Sparkles, X } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
 import { MAX_FILES, MAX_TOTAL_BYTES } from "../utils/pdfFile.js";
 import { splitPackFiles } from "../utils/dropFiles.js";
@@ -45,6 +45,34 @@ function RejectedFiles() {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** With an API key: ask the AI about every file that is not matched yet. */
+function AskAiForUnmatched() {
+  const { t } = useI18n();
+  const { state, derived, actions, ai } = useStore();
+  if (!ai.hasKey || !state.files.length) return null;
+  const busy = Object.values(state.aiSuggestions).some((s) => s.status === "loading" || s.status === "queued");
+  const unmatched = state.files.filter((file) => !derived.usage.has(file.id) && state.aiSuggestions[file.id]?.status !== "done");
+  return (
+    <div className="mx-4 mb-3 flex items-center justify-between gap-2 rounded-lg bg-violet-50 px-3 py-2 ring-1 ring-violet-200 ring-inset">
+      <p className="text-xs font-medium text-violet-900">{t("ai.unmatchedCount", { count: unmatched.length })}</p>
+      <button
+        type="button"
+        className="btn btn-secondary min-h-8 px-2.5 py-1 text-xs"
+        disabled={busy || !unmatched.length}
+        onClick={() =>
+          actions.askAi(
+            unmatched.map((file) => file.id),
+            { confirmSend: (count) => window.confirm(t("ai.confirmSend", { count })) },
+          )
+        }
+      >
+        <Sparkles className="size-3.5 text-violet-600" aria-hidden="true" />
+        {t("ai.askAll")}
+      </button>
     </div>
   );
 }
@@ -110,6 +138,7 @@ export default function UploadZone() {
       </div>
 
       <RejectedFiles />
+      <AskAiForUnmatched />
       <UploadedFileList />
     </section>
   );

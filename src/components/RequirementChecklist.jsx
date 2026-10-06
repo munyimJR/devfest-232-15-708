@@ -1,15 +1,18 @@
-import { CheckCheck, FileSpreadsheet, WandSparkles } from "lucide-react";
+import { useState } from "react";
+import { CheckCheck, FileSpreadsheet, Sparkles, WandSparkles } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
 import { checklistCsv } from "../utils/csv.js";
 import { checklistFileName, downloadBytes } from "../utils/download.js";
 import RequirementRow from "./RequirementRow.jsx";
+import AiSettingsDialog from "./AiSettingsDialog.jsx";
 
 /** Right column: every requirement in `order`, each with exactly one status. */
 export default function RequirementChecklist() {
   const i18n = useI18n();
   const { t } = i18n;
-  const { state, derived, actions } = useStore();
+  const { state, derived, actions, ai } = useStore();
   const required = state.requirements.filter((req) => req.mandatory).length;
+  const [aiOpen, setAiOpen] = useState(false);
 
   const exportCsv = () => {
     try {
@@ -40,6 +43,16 @@ export default function RequirementChecklist() {
               {t("auto.confirmAll")}
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn-secondary min-h-9 px-3"
+            onClick={() => setAiOpen(true)}
+            aria-label={ai.hasKey ? t("ai.buttonOn") : t("ai.button")}
+          >
+            <Sparkles className="size-4 text-violet-600" aria-hidden="true" />
+            {t("ai.button")}
+            {ai.hasKey && <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />}
+          </button>
           <button type="button" className="btn btn-secondary min-h-9 px-3" onClick={exportCsv}>
             <FileSpreadsheet className="size-4 text-brand-700" aria-hidden="true" />
             {t("csv.button")}
@@ -72,6 +85,7 @@ export default function RequirementChecklist() {
           <RequirementRow key={row.req.id} row={row} />
         ))}
       </ol>
+      <AiSettingsDialog open={aiOpen} onClose={() => setAiOpen(false)} />
     </section>
   );
 }
