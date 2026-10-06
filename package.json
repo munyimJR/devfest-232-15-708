@@ -1,0 +1,27 @@
+{
+  "name": "tenderpack",
+  "private": true,
+  "version": "1.0.0",
+  "description": "TenderPack - Tender Document Package Builder (100% in-browser)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "verify": "node scripts/verify-sample.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^1.52.0",
+    "pdf-lib": "^1.17.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3"
+  }
+}
