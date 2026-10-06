@@ -28,6 +28,7 @@ export default function GeneratePanel() {
         tender: state.tender,
         includedDocs: summary.included.map(({ req, file }) => ({ req, file })),
         createdDate: todayLocalYmd(),
+        includeIndex: state.options.includeIndex,
       });
       const fileName = packageFileName(state.tender.tender_id);
       downloadBytes(bytes, fileName);
@@ -74,13 +75,24 @@ export default function GeneratePanel() {
                 <CircleCheck className="size-6 shrink-0" aria-hidden="true" />
                 {t("gen.ready", { docs: summary.included.length, pages: packagePages })}
               </p>
-              <p className="mt-1 text-sm text-slate-600">{t("gen.readyNote")}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                {t(state.options.includeIndex ? "gen.readyNoteIndex" : "gen.readyNote")}
+              </p>
               {lastPackage && !packageFresh && <p className="mt-1 text-sm font-medium text-amber-800">{t("gen.stale")}</p>}
             </div>
           )}
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <label className="mr-1 inline-flex min-h-10 items-center gap-2 rounded-lg px-2 text-sm font-medium text-slate-700 hover:bg-slate-100">
+            <input
+              type="checkbox"
+              className="size-4 rounded accent-brand-700"
+              checked={state.options.includeIndex}
+              onChange={(event) => actions.setOption("includeIndex", event.target.checked)}
+            />
+            {t("gen.includeIndex")}
+          </label>
           {packageFresh && (
             <>
               <button type="button" className="btn btn-secondary" onClick={() => downloadBytes(lastPackage.bytes, lastPackage.fileName)}>

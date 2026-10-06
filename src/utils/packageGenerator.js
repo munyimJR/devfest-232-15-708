@@ -1,11 +1,12 @@
 // Build the tender package PDF. Pure: bytes in -> bytes out. No DOM or React imports.
 //
-// Package = English cover page + every page of each included document in requirement
-// order + the footer "<tender_id> | Page N of M" on every page. The footer lives in a
-// 28pt strip added *outside* each page's visible area, so it never covers original
-// content (some pages are full-page scans).
+// Package = English cover page + optional index page + every page of each included document
+// in requirement order + the footer "<tender_id> | Page N of M" on every page. The footer
+// lives in a 28pt strip added *outside* each page's visible area, so it never covers original
+// content (some pages are full-page scans). Cover and index entries link to the document start
+// pages, and the PDF gets one bookmark per document.
 
-import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
+import { PDFDocument, PDFHexString, PDFName, StandardFonts, degrees, rgb } from "pdf-lib";
 import { safeText } from "./pdfText.js";
 
 export const FOOTER_HEIGHT = 28;
@@ -19,6 +20,7 @@ const COLORS = {
   ink: rgb(0.1, 0.12, 0.14),
   text: rgb(0.2, 0.22, 0.25),
   muted: rgb(0.42, 0.45, 0.49),
+  leader: rgb(0.62, 0.65, 0.68),
   rule: rgb(0.83, 0.86, 0.88),
   panel: rgb(0.953, 0.973, 0.976),
   panelBorder: rgb(0.85, 0.9, 0.91),
@@ -46,13 +48,34 @@ export function pageLabel(count) {
 }
 
 /**
+ * Width of `text` as drawText renders it. pdf-lib's widthOfTextAtSize() applies kerning,
+ * but drawText() does not, so measuring glyph by glyph keeps alignment exact.
+ */
+export function textWidth(font, text, size) {
+  let width = 0;
+  for (const ch of String(text)) width += font.widthOfTextAtSize(ch, size);
+  return width;
+}
+
+/** Page number (1-based, final package numbering) where each document starts. */
+export function documentStartPages(pageCounts, { includeIndex = false } = {}) {
+  let next = (includeIndex ? 2 : 1) + 1;
+  return pageCounts.map((count) => {
+    const start = next;
+    next += count;
+    return start;
+  });
+}
+
+/**
  * @param {object} args
  * @param {object} args.tender        tender details from requirements.json
  * @param {Array}  args.includedDocs  [{ req, file }] already sorted by requirement order
  * @param {string} args.createdDate   local date, YYYY-MM-DD
+ * @param {boolean} [args.includeIndex] add an index page after the cover
  * @returns {Promise<Uint8Array>}
  */
-export async function buildPackage({ tender, includedDocs, createdDate }) {
+export async function buildPackage({ tender, includedDocs, createdDate, includeIndex = false }) {
   const out = await PDFDocument.create();
   const fonts = {
     regular: await out.embedFont(StandardFonts.Helvetica),
@@ -65,22 +88,54 @@ export async function buildPackage({ tender, includedDocs, createdDate }) {
   out.setProducer("TenderPack (pdf-lib)");
   out.setLanguage("en");
 
-  const cover = out.addPage([A4.width, A4.height]);
-  drawCover(cover, fonts, { tender, includedDocs, createdDate });
-
+  // Open every document first, so start pages use the real page counts.
+  const sources = [];
   for (const { file } of includedDocs) {
-    let copied;
     try {
       const src = await PDFDocument.load(file.bytes.slice(), { updateMetadata: false });
-      copied = await out.copyPages(src, src.getPageIndices());
+      if (!src.getPageCount()) throw new Error("no pages");
+      sources.push(src);
     } catch {
       throw new PackageError("doc_unreadable", { name: file.name });
+    }
+  }
+  const pageCounts = sources.map((src) => src.getPageCount());
+  const startPages = documentStartPages(pageCounts, { includeIndex });
+  const entries = includedDocs.map((doc, index) => ({
+    title: doc.req.title_en,
+    pages: pageCounts[index],
+    startPage: startPages[index],
+  }));
+
+  const cover = out.addPage([A4.width, A4.height]);
+  const coverLinks = drawCover(cover, fonts, { tender, entries, createdDate });
+  let indexPage = null;
+  let indexLinks = [];
+  if (includeIndex) {
+    indexPage = out.addPage([A4.width, A4.height]);
+    indexLinks = drawIndexPage(indexPage, fonts, { tender, entries });
+  }
+
+  for (let i = 0; i < sources.length; i += 1) {
+    let copied;
+    try {
+      copied = await out.copyPages(sources[i], sources[i].getPageIndices());
+    } catch {
+      throw new PackageError("doc_unreadable", { name: includedDocs[i].file.name });
     }
     for (const page of copied) out.addPage(page);
   }
 
-  // Footers are added last, when the total page count is known.
   const pages = out.getPages();
+  for (const link of coverLinks) addLink(out, cover, link.rect, pages[entries[link.entry].startPage - 1]);
+  for (const link of indexLinks) addLink(out, indexPage, link.rect, pages[entries[link.entry].startPage - 1]);
+  addOutline(out, [
+    { title: "Cover page", page: pages[0] },
+    ...(indexPage ? [{ title: "Index", page: indexPage }] : []),
+    ...entries.map((entry) => ({ title: entry.title, page: pages[entry.startPage - 1] })),
+  ]);
+
+  // Footers are added last, when the total page count is known.
   pages.forEach((page, index) => {
     addFooterStrip(page, fonts.regular, footerText(tender.tender_id, index + 1, pages.length));
   });
@@ -92,7 +147,7 @@ export async function buildPackage({ tender, includedDocs, createdDate }) {
 // Cover page
 // ---------------------------------------------------------------------------
 
-function drawCover(page, fonts, { tender, includedDocs, createdDate }) {
+function drawCover(page, fonts, { tender, entries, createdDate }) {
   const { regular, bold } = fonts;
   const { width, height } = page.getSize();
   const margin = 56;
@@ -104,13 +159,7 @@ function drawCover(page, fonts, { tender, includedDocs, createdDate }) {
   page.drawText("TENDER DOCUMENT PACKAGE", { x: margin, y, size: 24, font: bold, color: COLORS.teal });
   y -= 20;
   const bidderLine = clampLines(wrapText(safeText(tender.bidder), regular, 11, contentWidth), 1, regular, 11, contentWidth)[0];
-  page.drawText(bidderLine, {
-    x: margin,
-    y,
-    size: 11,
-    font: regular,
-    color: COLORS.muted,
-  });
+  page.drawText(bidderLine, { x: margin, y, size: 11, font: regular, color: COLORS.muted });
   y -= 26;
 
   // Tender details in a light panel: label column + wrapped value column.
@@ -158,14 +207,13 @@ function drawCover(page, fonts, { tender, includedDocs, createdDate }) {
   }
   y -= panelHeight + 34;
 
-  const totalPages = includedDocs.reduce((sum, doc) => sum + doc.file.pages, 0);
+  const totalPages = entries.reduce((sum, entry) => sum + entry.pages, 0);
   page.drawText("Included Documents", { x: margin, y, size: 13, font: bold, color: COLORS.teal });
-  const summary = `${includedDocs.length} ${includedDocs.length === 1 ? "document" : "documents"}, ${pageLabel(totalPages)}`;
-  const summarySize = 10;
+  const summary = `${entries.length} ${entries.length === 1 ? "document" : "documents"}, ${pageLabel(totalPages)}`;
   page.drawText(summary, {
-    x: margin + contentWidth - regular.widthOfTextAtSize(summary, summarySize),
+    x: margin + contentWidth - textWidth(regular, summary, 10),
     y,
-    size: summarySize,
+    size: 10,
     font: regular,
     color: COLORS.muted,
   });
@@ -173,31 +221,88 @@ function drawCover(page, fonts, { tender, includedDocs, createdDate }) {
   drawRule(page, margin, y, contentWidth, 0.75);
   y -= 20;
 
-  const items = includedDocs.map((doc) => safeText(`${doc.req.title_en} (${pageLabel(doc.file.pages)})`));
-  drawDocumentList(page, fonts, items, { x: margin, top: y, width: contentWidth, bottom: 84 });
+  const items = entries.map((entry) => ({
+    text: safeText(`${entry.title} (${pageLabel(entry.pages)})`),
+    page: `Page ${entry.startPage}`,
+  }));
+  const links = drawEntryList(page, fonts, items, { x: margin, top: y, width: contentWidth, bottom: 84, leaders: false });
 
   // Closing note at the bottom of the cover.
   drawRule(page, margin, 66, contentWidth, 0.5);
   const note = "Documents follow the order of the tender's requirement list. Every page is numbered in the footer.";
   page.drawText(note, { x: margin, y: 50, size: 8.5, font: regular, color: COLORS.muted });
+  return links;
 }
 
-/** Numbered list that always fits between `top` and `bottom` (font shrinks if needed). */
-function drawDocumentList(page, fonts, items, { x, top, width, bottom }) {
+// ---------------------------------------------------------------------------
+// Index page
+// ---------------------------------------------------------------------------
+
+function drawIndexPage(page, fonts, { tender, entries }) {
+  const { regular, bold } = fonts;
+  const { width, height } = page.getSize();
+  const margin = 56;
+  const contentWidth = width - margin * 2;
+
+  page.drawRectangle({ x: 0, y: height - 12, width, height: 12, color: COLORS.teal });
+  let y = height - 12 - 62;
+  page.drawText("INDEX OF DOCUMENTS", { x: margin, y, size: 22, font: bold, color: COLORS.teal });
+  y -= 20;
+  const subtitle = clampLines(
+    wrapText(safeText(`${tender.tender_id} - ${tender.title}`), regular, 11, contentWidth),
+    1,
+    regular,
+    11,
+    contentWidth,
+  )[0];
+  page.drawText(subtitle, { x: margin, y, size: 11, font: regular, color: COLORS.muted });
+  y -= 26;
+
+  page.drawText("Document", { x: margin, y, size: 9, font: bold, color: COLORS.muted });
+  const pageHeader = "Starts on page";
+  page.drawText(pageHeader, {
+    x: margin + contentWidth - textWidth(bold, pageHeader, 9),
+    y,
+    size: 9,
+    font: bold,
+    color: COLORS.muted,
+  });
+  y -= 9;
+  drawRule(page, margin, y, contentWidth, 0.75);
+  y -= 22;
+
+  const items = entries.map((entry) => ({ text: safeText(entry.title), page: String(entry.startPage) }));
+  const links = drawEntryList(page, fonts, items, { x: margin, top: y, width: contentWidth, bottom: 84, leaders: true });
+
+  drawRule(page, margin, 66, contentWidth, 0.5);
+  const note = "Page numbers refer to the footer numbering of this package. Click an entry to open the document.";
+  page.drawText(note, { x: margin, y: 50, size: 8.5, font: regular, color: COLORS.muted });
+  return links;
+}
+
+/**
+ * Numbered list that always fits between `top` and `bottom` (the font shrinks if needed).
+ * items: [{ text, page }]. With `leaders`, dots run from the title to a bold page number
+ * (index style); otherwise the page label sits right-aligned in muted text (cover style).
+ * Returns [{ entry, rect }] so each entry can link to its document.
+ */
+function drawEntryList(page, fonts, items, { x, top, width, bottom, leaders }) {
   const { regular, bold } = fonts;
   const available = top - bottom;
+  const pageFont = leaders ? bold : regular;
   const layout = (size, maxLines) => {
     const lineHeight = size * 1.42;
-    const gap = size * 0.55;
-    const numberWidth = bold.widthOfTextAtSize(`${items.length}.`, size) + size * 0.8;
-    const textWidth = width - numberWidth;
-    const blocks = items.map((text) => clampLines(wrapText(text, regular, size, textWidth), maxLines, regular, size, textWidth));
+    const gap = size * (leaders ? 0.75 : 0.55);
+    const numberWidth = textWidth(bold, `${items.length}.`, size) + size * 0.8;
+    const pageWidth = Math.max(0, ...items.map((item) => textWidth(pageFont, item.page, size)));
+    const titleWidth = width - numberWidth - pageWidth - size * 2;
+    const blocks = items.map((item) => clampLines(wrapText(item.text, regular, size, titleWidth), maxLines, regular, size, titleWidth));
     const height = blocks.reduce((sum, lines) => sum + lines.length * lineHeight, 0) + gap * Math.max(0, items.length - 1);
-    return { size, lineHeight, gap, numberWidth, blocks, height };
+    return { size, lineHeight, gap, numberWidth, pageWidth, blocks, height };
   };
 
   let chosen = null;
-  for (const size of [11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7]) {
+  for (const size of leaders ? [12, 11.5, 11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7] : [11, 10.5, 10, 9.5, 9, 8.5, 8, 7.5, 7]) {
     const candidate = layout(size, 3);
     if (candidate.height <= available) {
       chosen = candidate;
@@ -216,12 +321,14 @@ function drawDocumentList(page, fonts, items, { x, top, width, bottom }) {
     }
   }
 
-  const { size, lineHeight, gap, numberWidth, blocks } = chosen;
+  const { size, lineHeight, gap, numberWidth, pageWidth, blocks } = chosen;
+  const right = x + width;
+  const links = [];
   let y = top;
   blocks.forEach((lines, index) => {
     const number = `${index + 1}.`;
     page.drawText(number, {
-      x: x + numberWidth - size * 0.8 - bold.widthOfTextAtSize(number, size),
+      x: x + numberWidth - size * 0.8 - textWidth(bold, number, size),
       y,
       size,
       font: bold,
@@ -230,11 +337,86 @@ function drawDocumentList(page, fonts, items, { x, top, width, bottom }) {
     lines.forEach((line, lineIndex) => {
       page.drawText(line, { x: x + numberWidth, y: y - lineIndex * lineHeight, size, font: regular, color: COLORS.text });
     });
+
+    // Page label on the last line of the entry.
+    const lastY = y - (lines.length - 1) * lineHeight;
+    const label = items[index].page;
+    const labelWidth = textWidth(pageFont, label, size);
+    page.drawText(label, {
+      x: right - labelWidth,
+      y: lastY,
+      size,
+      font: pageFont,
+      color: leaders ? COLORS.ink : COLORS.muted,
+    });
+    if (leaders) {
+      const textEnd = x + numberWidth + textWidth(regular, lines[lines.length - 1], size) + size * 0.5;
+      const leaderEnd = right - pageWidth - size * 0.6; // same end on every row
+      const dot = ". ";
+      const dotWidth = textWidth(regular, dot, size);
+      const count = Math.floor((leaderEnd - textEnd) / dotWidth);
+      if (count > 0) {
+        page.drawText(dot.repeat(count).trimEnd(), {
+          x: leaderEnd - count * dotWidth + (dotWidth - textWidth(regular, ".", size)),
+          y: lastY,
+          size,
+          font: regular,
+          color: COLORS.leader,
+        });
+      }
+    }
+
+    links.push({
+      entry: index,
+      rect: { x, y: lastY - size * 0.35, width, height: (lines.length - 1) * lineHeight + size * 1.3 },
+    });
     y -= lines.length * lineHeight + gap;
   });
   if (hidden > 0) {
     page.drawText(`... and ${hidden} more`, { x: x + numberWidth, y, size, font: regular, color: COLORS.muted });
   }
+  return links;
+}
+
+// ---------------------------------------------------------------------------
+// Links and bookmarks
+// ---------------------------------------------------------------------------
+
+/** Invisible link from `rect` on `page` to the top of `target`. */
+function addLink(doc, page, rect, target) {
+  if (!page || !target) return;
+  const annotation = doc.context.obj({
+    Type: "Annot",
+    Subtype: "Link",
+    Rect: [rect.x, rect.y, rect.x + rect.width, rect.y + rect.height],
+    Border: [0, 0, 0],
+    Dest: [target.ref, "Fit"],
+  });
+  page.node.addAnnot(doc.context.register(annotation));
+}
+
+/** One top-level bookmark per item: [{ title, page }]. */
+function addOutline(doc, items) {
+  const valid = items.filter((item) => item.page);
+  if (!valid.length) return;
+  const { context } = doc;
+  const outlineRef = context.nextRef();
+  const refs = valid.map(() => context.nextRef());
+  valid.forEach((item, index) => {
+    const entry = context.obj({
+      Title: PDFHexString.fromText(item.title),
+      Parent: outlineRef,
+      Dest: [item.page.ref, "Fit"],
+    });
+    if (index > 0) entry.set(PDFName.of("Prev"), refs[index - 1]);
+    if (index < refs.length - 1) entry.set(PDFName.of("Next"), refs[index + 1]);
+    context.assign(refs[index], entry);
+  });
+  context.assign(
+    outlineRef,
+    context.obj({ Type: "Outlines", First: refs[0], Last: refs[refs.length - 1], Count: refs.length }),
+  );
+  doc.catalog.set(PDFName.of("Outlines"), outlineRef);
 }
 
 function drawRule(page, x, y, width, thickness = 0.6) {
@@ -248,19 +430,19 @@ export function wrapText(text, font, size, maxWidth) {
   let line = "";
   for (const word of words) {
     const candidate = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+    if (textWidth(font, candidate, size) <= maxWidth) {
       line = candidate;
       continue;
     }
     if (line) lines.push(line);
-    if (font.widthOfTextAtSize(word, size) <= maxWidth) {
+    if (textWidth(font, word, size) <= maxWidth) {
       line = word;
       continue;
     }
     // A single word longer than the line: break it by characters.
     let chunk = "";
     for (const ch of word) {
-      if (chunk && font.widthOfTextAtSize(chunk + ch, size) > maxWidth) {
+      if (chunk && textWidth(font, chunk + ch, size) > maxWidth) {
         lines.push(chunk);
         chunk = ch;
       } else {
@@ -278,7 +460,7 @@ export function clampLines(lines, maxLines, font, size, maxWidth) {
   if (lines.length <= maxLines) return lines;
   const kept = lines.slice(0, maxLines);
   let last = kept[maxLines - 1];
-  while (last && font.widthOfTextAtSize(`${last}...`, size) > maxWidth) last = last.slice(0, -1);
+  while (last && textWidth(font, `${last}...`, size) > maxWidth) last = last.slice(0, -1);
   kept[maxLines - 1] = `${last.trimEnd()}...`;
   return kept;
 }
@@ -366,9 +548,9 @@ export function addFooterStrip(page, font, text) {
   const length = horizontal ? strip.width : strip.height; // visual width of the strip
   const inset = Math.min(24, length * 0.04);
   let size = FOOTER_FONT_SIZE;
-  const widthAtSize = (s) => font.widthOfTextAtSize(safe, s);
+  const widthAtSize = (s) => textWidth(font, safe, s);
   if (widthAtSize(size) > length - 2 * inset) size = Math.max(4, (size * (length - 2 * inset)) / widthAtSize(size));
-  const textWidth = widthAtSize(size);
+  const footerWidth = widthAtSize(size);
   const capHeight = size * HELVETICA_CAP_HEIGHT;
   const baselineOffset = (H - capHeight) / 2; // from the strip's visual bottom edge
   const ruleOffset = 0.6; // keep the rule fully inside the strip
@@ -379,18 +561,18 @@ export function addFooterStrip(page, font, text) {
   if (rotation === 90) {
     const ruleX = strip.x + ruleOffset;
     page.drawLine({ start: { x: ruleX, y: strip.y + inset }, end: { x: ruleX, y: strip.y + strip.height - inset }, ...ruleStyle });
-    page.drawText(safe, { x: strip.x + H - baselineOffset, y: strip.y + (strip.height - textWidth) / 2, ...textStyle });
+    page.drawText(safe, { x: strip.x + H - baselineOffset, y: strip.y + (strip.height - footerWidth) / 2, ...textStyle });
   } else if (rotation === 180) {
     const ruleY = strip.y + ruleOffset;
     page.drawLine({ start: { x: strip.x + inset, y: ruleY }, end: { x: strip.x + strip.width - inset, y: ruleY }, ...ruleStyle });
-    page.drawText(safe, { x: strip.x + (strip.width + textWidth) / 2, y: strip.y + H - baselineOffset, ...textStyle });
+    page.drawText(safe, { x: strip.x + (strip.width + footerWidth) / 2, y: strip.y + H - baselineOffset, ...textStyle });
   } else if (rotation === 270) {
     const ruleX = strip.x + H - ruleOffset;
     page.drawLine({ start: { x: ruleX, y: strip.y + inset }, end: { x: ruleX, y: strip.y + strip.height - inset }, ...ruleStyle });
-    page.drawText(safe, { x: strip.x + baselineOffset, y: strip.y + (strip.height + textWidth) / 2, ...textStyle });
+    page.drawText(safe, { x: strip.x + baselineOffset, y: strip.y + (strip.height + footerWidth) / 2, ...textStyle });
   } else {
     const ruleY = strip.y + H - ruleOffset;
     page.drawLine({ start: { x: strip.x + inset, y: ruleY }, end: { x: strip.x + strip.width - inset, y: ruleY }, ...ruleStyle });
-    page.drawText(safe, { x: strip.x + (strip.width - textWidth) / 2, y: strip.y + baselineOffset, ...textStyle });
+    page.drawText(safe, { x: strip.x + (strip.width - footerWidth) / 2, y: strip.y + baselineOffset, ...textStyle });
   }
 }

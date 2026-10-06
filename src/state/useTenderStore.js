@@ -14,7 +14,9 @@ const MAX_MESSAGES = 100;
 
 const SIZE_LIMIT_PARAM = { en: formatBytes(MAX_TOTAL_BYTES, "en"), bn: formatBytes(MAX_TOTAL_BYTES, "bn") };
 
-export function createInitialState(lang = "en") {
+export const DEFAULT_OPTIONS = { includeIndex: true };
+
+export function createInitialState(lang = "en", options = DEFAULT_OPTIONS) {
   return {
     tender: null, // { tender_id, title, procuring_entity, bidder, submission_deadline }
     requirements: [], // sorted by order, then id
@@ -23,6 +25,7 @@ export function createInitialState(lang = "en") {
     expiry: {}, // { [requirementId]: "YYYY-MM-DD" }
     suggested: {}, // { [requirementId]: fileId } auto-matched, not yet checked by the user
     lang,
+    options, // package options (kept when a new pack is loaded)
     messages: [], // { id, kind: "toast" | "rejection", level, key, params }
     processing: [], // files being read right now: { id, name }
     requirementsError: null, // { key, params } from the last failed requirements.json load
@@ -76,7 +79,7 @@ export function reducer(state, action) {
     case "loadPack":
       // A whole pack replaces everything: tender, requirements, files, matches and dates.
       return {
-        ...createInitialState(state.lang),
+        ...createInitialState(state.lang, state.options),
         seq: state.seq,
         tender: action.tender,
         requirements: action.requirements,
@@ -216,6 +219,9 @@ export function reducer(state, action) {
     case "confirmAllSuggestions":
       return { ...state, suggested: {} };
 
+    case "setOption":
+      return { ...state, options: { ...state.options, [action.name]: action.value } };
+
     case "setLang":
       return { ...state, lang: action.lang === "bn" ? "bn" : "en" };
 
@@ -232,7 +238,7 @@ export function reducer(state, action) {
       return { ...state, messages: state.messages.filter((m) => m.kind !== action.kind) };
 
     case "reset":
-      return { ...createInitialState(state.lang), seq: state.seq };
+      return { ...createInitialState(state.lang, state.options), seq: state.seq };
 
     default:
       return state;
@@ -380,6 +386,7 @@ export function useTenderStore() {
   const setExpiry = useCallback((reqId, value) => dispatch({ type: "setExpiry", reqId, value }), []);
   const setLang = useCallback((lang) => dispatch({ type: "setLang", lang }), []);
   const autoMatch = useCallback(() => dispatch({ type: "autoMatch" }), []);
+  const setOption = useCallback((name, value) => dispatch({ type: "setOption", name, value }), []);
   const confirmSuggestion = useCallback((reqId) => dispatch({ type: "confirmSuggestion", reqId }), []);
   const confirmAllSuggestions = useCallback(() => dispatch({ type: "confirmAllSuggestions" }), []);
   const packageGenerated = useCallback((info) => dispatch({ type: "packageGenerated", info }), []);
@@ -407,11 +414,13 @@ export function useTenderStore() {
       : [];
     const summary = summarizeChecklist(rows);
     const requirementsById = new Map(state.requirements.map((r) => [r.id, r]));
-    // Cover page + every page of every included document.
-    const packagePages = summary.included.length ? summary.documentPages + 1 : 0;
+    // Cover page (+ index page) + every page of every included document.
+    const frontPages = state.options.includeIndex ? 2 : 1;
+    const packagePages = summary.included.length ? summary.documentPages + frontPages : 0;
     // Everything that changes the package content; a stored package with another signature is out of date.
     const packageSignature = JSON.stringify([
       state.tender,
+      state.options,
       summary.included.map((row) => [row.req.id, row.req.title_en, row.file.id]),
     ]);
     const packageFresh = Boolean(state.lastPackage) && state.lastPackage.signature === packageSignature && summary.canGenerate;
@@ -436,7 +445,7 @@ export function useTenderStore() {
       suggestedReqIds,
       canAutoMatch,
     };
-  }, [state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.lastPackage]);
+  }, [state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.options, state.lastPackage]);
 
   const actions = useMemo(
     () => ({
@@ -449,6 +458,7 @@ export function useTenderStore() {
       setExpiry,
       setLang,
       autoMatch,
+      setOption,
       confirmSuggestion,
       confirmAllSuggestions,
       packageGenerated,
@@ -457,7 +467,7 @@ export function useTenderStore() {
       dismissKind,
       reset,
     }),
-    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset],
+    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset],
   );
 
   return { state, derived, actions };

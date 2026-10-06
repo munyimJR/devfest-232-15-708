@@ -5,8 +5,10 @@ import {
   A4,
   FOOTER_HEIGHT,
   buildPackage,
+  documentStartPages,
   footerText,
   normalizeRotation,
+  textWidth,
   wrapText,
 } from "../src/utils/packageGenerator.js";
 import { safeText } from "../src/utils/pdfText.js";
@@ -152,7 +154,59 @@ describe("buildPackage", () => {
   });
 });
 
+describe("index page", () => {
+  it("computes start pages with and without the index", () => {
+    expect(documentStartPages([1, 1, 2, 6], { includeIndex: false })).toEqual([2, 3, 4, 6]);
+    expect(documentStartPages([1, 1, 2, 6], { includeIndex: true })).toEqual([3, 4, 5, 7]);
+  });
+
+  it("adds an index page after the cover listing every document's start page", async () => {
+    const two = await makePdf([{}, {}]);
+    const one = await makePdf([{}]);
+    const bytes = await buildPackage({
+      tender,
+      includedDocs: [doc("R1", 1, "Alpha Document", two, 2), doc("R2", 2, "Beta Document", one, 1)],
+      createdDate: "2026-10-06",
+      includeIndex: true,
+    });
+    const pdf = await PDFDocument.load(bytes);
+    expect(pdf.getPageCount()).toBe(5);
+    const cover = pageText(pdf, pdf.getPage(0)).toLowerCase();
+    const index = pageText(pdf, pdf.getPage(1)).toLowerCase();
+    expect(index).toContain(hexOf("INDEX OF DOCUMENTS"));
+    expect(index).toContain(hexOf("Alpha Document"));
+    expect(index).toContain(hexOf("Beta Document"));
+    expect(cover).toContain(hexOf("Page 3"));
+    expect(cover).toContain(hexOf("Page 5"));
+    expect(index).toContain(hexOf(footerText("T-TEST-1", 2, 5)));
+  });
+
+  it("links the cover and index entries to the documents and adds bookmarks", async () => {
+    const src = await makePdf([{}]);
+    const bytes = await buildPackage({
+      tender,
+      includedDocs: [doc("R1", 1, "Alpha", src, 1), doc("R2", 2, "Beta", src, 1)],
+      createdDate: "2026-10-06",
+      includeIndex: true,
+    });
+    const pdf = await PDFDocument.load(bytes);
+    const annotsOf = (page) => page.node.Annots()?.size() ?? 0;
+    expect(annotsOf(pdf.getPage(0))).toBe(2);
+    expect(annotsOf(pdf.getPage(1))).toBe(2);
+    const outline = pdf.catalog.lookup(PDFName.of("Outlines"));
+    expect(outline.lookup(PDFName.of("Count")).asNumber()).toBe(4); // cover, index, 2 documents
+  });
+});
+
 describe("helpers", () => {
+  it("measures text the way drawText renders it (no kerning)", async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const dots = ". ".repeat(20);
+    expect(textWidth(font, dots, 12)).toBeCloseTo(20 * 2 * font.widthOfTextAtSize(".", 12));
+    expect(textWidth(font, dots, 12)).toBeGreaterThan(font.widthOfTextAtSize(dots, 12));
+  });
+
   it("normalizes rotation", () => {
     expect([0, 90, 180, 270, 360, -90, 450, 89].map(normalizeRotation)).toEqual([0, 90, 180, 270, 0, 270, 90, 90]);
   });
@@ -162,7 +216,7 @@ describe("helpers", () => {
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const lines = wrapText(`short words then ${"x".repeat(200)}`, font, 10, 100);
     expect(lines.length).toBeGreaterThan(2);
-    for (const line of lines) expect(font.widthOfTextAtSize(line, 10)).toBeLessThanOrEqual(100);
+    for (const line of lines) expect(textWidth(font, line, 10)).toBeLessThanOrEqual(100);
   });
 });
 

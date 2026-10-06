@@ -144,13 +144,7 @@ check(
 check(validCase.summary.canGenerate, "generation is not blocked");
 
 // ---------------------------------------------------------------- package
-section("Package");
 const includedDocs = validCase.summary.included.map(({ req, file }) => ({ req, file }));
-const packageBytes = await buildPackage({ tender, includedDocs, createdDate: todayLocalYmd() });
-const pkg = await PDFDocument.load(packageBytes);
-const pkgPages = pkg.getPages();
-const expectedTotal = 1 + includedDocs.reduce((sum, doc) => sum + doc.file.pages, 0);
-check(pkgPages.length === 16 && expectedTotal === 16, `package has 16 pages (got ${pkgPages.length})`);
 
 function contentStreams(doc, page) {
   const contents = page.node.get(PDFName.of("Contents"));
@@ -173,13 +167,14 @@ function decodedText(doc, page) {
     })
     .join("\n");
 }
+const hexOf = (text) => Buffer.from(text, "latin1").toString("hex");
 
-// Expected source page for every package page (index 0 = cover).
-const expected = [{ label: "cover" }];
+// Expected source page for every document page, in package order.
+const documentPages = [];
 for (const doc of includedDocs) {
   const src = await PDFDocument.load(doc.file.bytes.slice());
   src.getPages().forEach((page, index) => {
-    expected.push({
+    documentPages.push({
       label: `${doc.req.title_en} p.${index + 1}`,
       reqId: doc.req.id,
       streams: contentStreams(src, page).map(fingerprint),
@@ -188,49 +183,75 @@ for (const doc of includedDocs) {
   });
 }
 
-let orderOk = true;
-let cropOk = true;
-let footerOk = true;
-pkgPages.forEach((page, index) => {
-  const want = expected[index];
-  if (index > 0 && want) {
-    const have = new Set(contentStreams(pkg, page).map(fingerprint));
-    if (!want.streams.every((fp) => have.has(fp))) {
-      orderOk = false;
-      console.log(`          page ${index + 1} is not ${want.label}`);
-    }
-  }
-  const crop = page.getCropBox();
-  const media = page.getMediaBox();
-  const sourceHeight = index === 0 ? 841.89 : want?.crop.height;
-  if (Math.abs(crop.height - (sourceHeight + FOOTER_HEIGHT)) > 0.01) {
-    cropOk = false;
-    console.log(`          page ${index + 1}: CropBox height ${crop.height}, source ${sourceHeight}`);
-  }
-  if (crop.x < media.x || crop.y < media.y || crop.x + crop.width > media.x + media.width + 0.01 || crop.y + crop.height > media.y + media.height + 0.01) {
-    cropOk = false;
-    console.log(`          page ${index + 1}: CropBox outside MediaBox`);
-  }
-  const hex = Buffer.from(footerText(tender.tender_id, index + 1, pkgPages.length), "latin1").toString("hex");
-  if (!decodedText(pkg, page).toLowerCase().includes(hex)) {
-    footerOk = false;
-    console.log(`          page ${index + 1}: footer text not found`);
-  }
-});
-check(orderOk, "every package page is the right source page, in requirement order");
+async function checkPackage({ includeIndex, expectedPages }) {
+  section(`Package ${includeIndex ? "with" : "without"} index page`);
+  const bytes = await buildPackage({ tender, includedDocs, createdDate: todayLocalYmd(), includeIndex });
+  const pkg = await PDFDocument.load(bytes);
+  const pages = pkg.getPages();
+  check(pages.length === expectedPages, `package has ${expectedPages} pages (got ${pages.length})`);
 
-const firstOf = (reqId) => expected.findIndex((e) => e.reqId === reqId) + 1;
-const lastOf = (reqId) => expected.map((e) => e.reqId).lastIndexOf(reqId) + 1;
-check(
-  lastOf("R08") < firstOf("R09"),
-  `Technical Proposal (pages ${firstOf("R08")}-${lastOf("R08")}) comes before Financial Proposal (pages ${firstOf("R09")}-${lastOf("R09")})`,
-);
-check(cropOk, `every page's CropBox is ${FOOTER_HEIGHT}pt taller than its source and inside the MediaBox`);
-check(footerOk, `every page has the footer "${footerText(tender.tender_id, "N", pkgPages.length)}"`);
+  const front = includeIndex ? [{ label: "cover" }, { label: "index" }] : [{ label: "cover" }];
+  const expected = [...front, ...documentPages];
+  let orderOk = true;
+  let cropOk = true;
+  let footerOk = true;
+  pages.forEach((page, index) => {
+    const want = expected[index];
+    if (want?.streams) {
+      const have = new Set(contentStreams(pkg, page).map(fingerprint));
+      if (!want.streams.every((fp) => have.has(fp))) {
+        orderOk = false;
+        console.log(`          page ${index + 1} is not ${want.label}`);
+      }
+    }
+    const crop = page.getCropBox();
+    const media = page.getMediaBox();
+    const sourceHeight = want?.crop ? want.crop.height : 841.89;
+    if (Math.abs(crop.height - (sourceHeight + FOOTER_HEIGHT)) > 0.01) {
+      cropOk = false;
+      console.log(`          page ${index + 1}: CropBox height ${crop.height}, source ${sourceHeight}`);
+    }
+    if (crop.x < media.x || crop.y < media.y || crop.x + crop.width > media.x + media.width + 0.01 || crop.y + crop.height > media.y + media.height + 0.01) {
+      cropOk = false;
+      console.log(`          page ${index + 1}: CropBox outside MediaBox`);
+    }
+    if (!decodedText(pkg, page).toLowerCase().includes(hexOf(footerText(tender.tender_id, index + 1, pages.length)))) {
+      footerOk = false;
+      console.log(`          page ${index + 1}: footer text not found`);
+    }
+  });
+  check(orderOk, "every package page is the right source page, in requirement order");
+  const firstOf = (reqId) => expected.findIndex((e) => e.reqId === reqId) + 1;
+  const lastOf = (reqId) => expected.map((e) => e.reqId).lastIndexOf(reqId) + 1;
+  check(
+    lastOf("R08") < firstOf("R09"),
+    `Technical Proposal (pages ${firstOf("R08")}-${lastOf("R08")}) comes before Financial Proposal (pages ${firstOf("R09")}-${lastOf("R09")})`,
+  );
+  check(cropOk, `every page's CropBox is ${FOOTER_HEIGHT}pt taller than its source and inside the MediaBox`);
+  check(footerOk, `every page has the footer "${footerText(tender.tender_id, "N", pages.length)}"`);
+
+  // Start pages on the cover (and index) match where each document really starts.
+  const coverText = decodedText(pkg, pages[0]).toLowerCase();
+  const startsOk = includedDocs.every((doc) => coverText.includes(hexOf(`Page ${firstOf(doc.req.id)}`)));
+  check(startsOk, "the cover lists the page where each document starts");
+  if (includeIndex) {
+    const indexText = decodedText(pkg, pages[1]).toLowerCase();
+    const indexOk = includedDocs.every(
+      (doc) => indexText.includes(hexOf(doc.req.title_en)) && indexText.includes(hexOf(String(firstOf(doc.req.id)))),
+    );
+    check(indexOk, `the index page lists every document with its start page (Trade License ... ${firstOf("R01")})`);
+  }
+  const outline = pkg.catalog.lookup(PDFName.of("Outlines"));
+  check(Boolean(outline) && outline.lookup(PDFName.of("Count")).asNumber() === includedDocs.length + front.length, "the PDF has a bookmark for every document");
+  return bytes;
+}
+
+const withIndex = await checkPackage({ includeIndex: true, expectedPages: 17 });
+await checkPackage({ includeIndex: false, expectedPages: 16 });
 
 const outFile = path.join(outDir, `${tender.tender_id}_Package.pdf`);
-fs.writeFileSync(outFile, packageBytes);
-console.log(`\nWrote ${path.relative(root, outFile)} (${(packageBytes.length / 1024).toFixed(1)} KB)`);
+fs.writeFileSync(outFile, withIndex);
+console.log(`\nWrote ${path.relative(root, outFile)} (${(withIndex.length / 1024).toFixed(1)} KB, with index page)`);
 
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nAll checks passed");
 process.exit(failures ? 1 : 0);
