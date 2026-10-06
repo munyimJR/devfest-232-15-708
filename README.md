@@ -39,15 +39,32 @@ Other scripts:
 Switch between **English | বাংলা** at any time from the header; the whole interface follows.
 The generated PDF is always in English.
 
+### Time savers
+
+- **Load pack (.zip)**: one click loads `requirements.json` (found anywhere in the zip) and every
+  file inside a `documents/` folder, through the same checks as normal uploads. You can also drop a
+  whole pack folder on the first screen.
+- **Auto-match files**: suggests a file for every document that has none, by comparing file names
+  with document names (with a small table of tender synonyms, newer year wins a tie). Suggestions
+  are marked *Suggested — please check* until you confirm or change them.
+- **Include index page** (on by default): an index after the cover lists where each document
+  starts; the cover shows start pages too. Entries are clickable and the PDF has bookmarks.
+- **Export checklist (CSV)**: order, document, required, file name, pages, expiry date and status
+  in the current language, saved as `<tender_id>_Checklist.csv` (UTF-8 with BOM, opens in Excel).
+- **Save and reopen**: your work (requirements, files, matches, dates, options) is saved in this
+  browser's IndexedDB after every change and restored when you come back. *Start over* clears it.
+
 ## Privacy
 
-Everything stays in your browser tab. Files are never uploaded, stored on a server or sent to
-any external service. Closing the tab discards them.
+Everything stays in your browser. Files are never uploaded, stored on a server or sent to
+any external service. To let you continue later, your work is kept in this browser's own storage
+(IndexedDB) on this computer only; *Start over* deletes it.
 
 ## How the package is built
 
 - **Cover page** (A4): tender ID, title, procuring entity, bidder, deadline, creation date and
-  the numbered list of included documents with page counts.
+  the numbered list of included documents with page counts and start pages.
+- **Index page** (optional): every document with the page where it starts, with dot leaders.
 - **Documents** in requirement `order` (never by file name), all pages in their original order.
   Optional documents without a file are skipped.
 - **Footer** `<tender_id> | Page N of M` on every page, including the cover. It is drawn in a
@@ -60,6 +77,7 @@ any external service. Closing the tab discards them.
 
 - Vite + React (JavaScript), Tailwind CSS v4 (`@tailwindcss/vite`)
 - [pdf-lib](https://pdf-lib.js.org/) for reading, page counting, merging, cover page and footers
+- [JSZip](https://stuk.github.io/jszip/) for loading a whole pack from a .zip
 - Web Crypto SHA-256 for duplicate detection (with a pure-JS fallback on non-secure origins)
 - lucide-react icons, Inter + Hind Siliguri fonts
 - vitest for unit tests
@@ -75,6 +93,10 @@ src/
   utils/status.js             the status engine (single source of truth)
   utils/packageGenerator.js   pure: bytes in -> bytes out (cover, merge, footer strip)
   utils/pdfText.js            safeText() for Helvetica / WinAnsi
+  utils/zipPack.js            read a pack .zip (requirements.json + documents/)
+  utils/autoMatch.js          suggest matches from file names
+  utils/csv.js                checklist CSV export
+  utils/storage.js            IndexedDB save / restore
   components/                 UI
 tests/                        vitest unit tests
 scripts/verify-sample.mjs     sample-pack smoke test

@@ -23,7 +23,7 @@ const en = {
   "empty.drop": "Drag and drop requirements.json here",
   "empty.or": "or",
   "empty.choose": "Choose requirements.json",
-  "empty.privacy": "Your files never leave this computer. Nothing is uploaded.",
+  "empty.privacy": "Your files never leave this computer. Nothing is uploaded. Work is saved in this browser only.",
   "empty.errorTitle": "requirements.json could not be loaded",
 
   "json.loaded": "Requirements loaded: {count} documents for tender {id}.",
@@ -197,6 +197,10 @@ const en = {
   "gen.stale": "Changes made since the last package. Generate again to include them.",
 
   "toast.close": "Close",
+  "app.loading": "Loading…",
+  "restore.banner": "Your previous work was restored.",
+  "storage.saveFailed":
+    "Your work could not be saved in this browser (storage may be full or blocked). Everything still works in this tab.",
   "toast.region": "Notifications",
   "error.generic": "Something went wrong. Please try again.",
   "crash.title": "Sorry, something went wrong",
@@ -220,7 +224,7 @@ const bn = {
   "empty.drop": "requirements.json ফাইলটি এখানে টেনে এনে ছাড়ুন",
   "empty.or": "অথবা",
   "empty.choose": "requirements.json বেছে নিন",
-  "empty.privacy": "আপনার ফাইল এই কম্পিউটারের বাইরে যায় না। কিছুই আপলোড করা হয় না।",
+  "empty.privacy": "আপনার ফাইল এই কম্পিউটারের বাইরে যায় না। কিছুই আপলোড করা হয় না। কাজ শুধু এই ব্রাউজারেই সংরক্ষিত থাকে।",
   "empty.errorTitle": "requirements.json লোড করা যায়নি",
 
   "json.loaded": "টেন্ডার {id}-এর {count}টি নথির তালিকা লোড হয়েছে।",
@@ -389,6 +393,10 @@ const bn = {
   "gen.stale": "শেষ প্যাকেজের পরে পরিবর্তন হয়েছে। সেগুলো যুক্ত করতে আবার তৈরি করুন।",
 
   "toast.close": "বন্ধ করুন",
+  "app.loading": "লোড হচ্ছে…",
+  "restore.banner": "আপনার আগের কাজ ফিরিয়ে আনা হয়েছে।",
+  "storage.saveFailed":
+    "আপনার কাজ এই ব্রাউজারে সংরক্ষণ করা যায়নি (স্টোরেজ পূর্ণ বা বন্ধ থাকতে পারে)। এই ট্যাবে সবকিছু ঠিকমতো কাজ করবে।",
   "toast.region": "বার্তা",
   "error.generic": "কিছু একটা সমস্যা হয়েছে। আবার চেষ্টা করুন।",
   "crash.title": "দুঃখিত, একটি সমস্যা হয়েছে",

@@ -9,6 +9,7 @@ import { buildChecklist, fileUsage, findDuplicates, summarizeChecklist } from ".
 import { revokeAllPreviews, revokePreview } from "../utils/download.js";
 import { MAX_ZIP_BYTES, readPackZip } from "../utils/zipPack.js";
 import { suggestMatches } from "../utils/autoMatch.js";
+import { clearSavedWork, loadSavedWork, sanitizeSavedWork, saveWork, sessionFromState } from "../utils/storage.js";
 
 const MAX_MESSAGES = 100;
 
@@ -16,8 +17,10 @@ const SIZE_LIMIT_PARAM = { en: formatBytes(MAX_TOTAL_BYTES, "en"), bn: formatByt
 
 export const DEFAULT_OPTIONS = { includeIndex: true };
 
-export function createInitialState(lang = "en", options = DEFAULT_OPTIONS) {
+export function createInitialState(lang = "en", options = DEFAULT_OPTIONS, hydrated = false) {
   return {
+    hydrated, // false until saved work has been looked up (nothing is saved before that)
+    restored: false, // true when previous work was restored (shows the banner)
     tender: null, // { tender_id, title, procuring_entity, bidder, submission_deadline }
     requirements: [], // sorted by order, then id
     files: [], // { id, name, size, pages, hash, bytes }
@@ -79,7 +82,7 @@ export function reducer(state, action) {
     case "loadPack":
       // A whole pack replaces everything: tender, requirements, files, matches and dates.
       return {
-        ...createInitialState(state.lang, state.options),
+        ...createInitialState(state.lang, state.options, true),
         seq: state.seq,
         tender: action.tender,
         requirements: action.requirements,
@@ -219,6 +222,13 @@ export function reducer(state, action) {
     case "confirmAllSuggestions":
       return { ...state, suggested: {} };
 
+    case "restore":
+      if (!action.data) return { ...state, hydrated: true };
+      return { ...state, ...action.data, hydrated: true, restored: true };
+
+    case "dismissRestored":
+      return { ...state, restored: false };
+
     case "setOption":
       return { ...state, options: { ...state.options, [action.name]: action.value } };
 
@@ -238,7 +248,7 @@ export function reducer(state, action) {
       return { ...state, messages: state.messages.filter((m) => m.kind !== action.kind) };
 
     case "reset":
-      return { ...createInitialState(state.lang, state.options), seq: state.seq };
+      return { ...createInitialState(state.lang, state.options, true), seq: state.seq };
 
     default:
       return state;
@@ -264,6 +274,36 @@ export function useTenderStore() {
     saveLang(state.lang);
     document.documentElement.lang = state.lang;
   }, [state.lang]);
+
+  // Reopen previous work saved in this browser.
+  useEffect(() => {
+    let cancelled = false;
+    loadSavedWork().then((saved) => {
+      if (!cancelled) dispatch({ type: "restore", data: saved ? sanitizeSavedWork(saved, DEFAULT_OPTIONS) : null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Save after every change (debounced). Never before the saved work has been read.
+  const saveWarnedRef = useRef(false);
+  useEffect(() => {
+    if (!state.hydrated) return undefined;
+    const timer = setTimeout(() => {
+      if (!state.tender) {
+        clearSavedWork();
+        return;
+      }
+      saveWork(sessionFromState(state), state.files).catch(() => {
+        if (saveWarnedRef.current) return;
+        saveWarnedRef.current = true;
+        dispatch({ type: "notify", level: "warning", key: "storage.saveFailed" });
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.hydrated, state.tender, state.requirements, state.files, state.matches, state.expiry, state.suggested, state.options]);
 
   const notify = useCallback((level, key, params) => dispatch({ type: "notify", level, key, params }), []);
 
@@ -396,8 +436,10 @@ export function useTenderStore() {
   const reset = useCallback(() => {
     epochRef.current += 1;
     revokeAllPreviews();
+    clearSavedWork();
     dispatch({ type: "reset" });
   }, []);
+  const dismissRestored = useCallback(() => dispatch({ type: "dismissRestored" }), []);
 
   const derived = useMemo(() => {
     const totalBytes = state.files.reduce((sum, f) => sum + f.size, 0);
@@ -466,8 +508,9 @@ export function useTenderStore() {
       dismiss,
       dismissKind,
       reset,
+      dismissRestored,
     }),
-    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset],
+    [loadRequirementsFile, loadPack, addFiles, removeFile, assign, unassign, setExpiry, setLang, autoMatch, setOption, confirmSuggestion, confirmAllSuggestions, packageGenerated, notify, dismiss, dismissKind, reset, dismissRestored],
   );
 
   return { state, derived, actions };

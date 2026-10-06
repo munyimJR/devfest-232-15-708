@@ -11,6 +11,8 @@ import UploadZone from "./components/UploadZone.jsx";
 import RequirementChecklist from "./components/RequirementChecklist.jsx";
 import GeneratePanel from "./components/GeneratePanel.jsx";
 import Toasts from "./components/Toasts.jsx";
+import RestoredBanner from "./components/RestoredBanner.jsx";
+import { LoaderCircle } from "lucide-react";
 
 /** Stop the browser from opening a file dropped outside a drop zone (that would lose all work). */
 function useDropGuard() {
@@ -40,8 +42,14 @@ export default function App() {
         <div className="flex min-h-screen flex-col">
           <Header />
           <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 pb-6 sm:px-6">
-            {store.state.tender ? (
+            {!store.state.hydrated ? (
+              <div className="grid place-items-center py-24 text-slate-500" role="status">
+                <LoaderCircle className="size-6 animate-spin" aria-hidden="true" />
+                <span className="sr-only">{i18n.t("app.loading")}</span>
+              </div>
+            ) : store.state.tender ? (
               <div className="space-y-5 pt-6">
+                <RestoredBanner />
                 <TenderHeader />
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
                   <WorkflowSteps />
