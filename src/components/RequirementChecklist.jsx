@@ -1,12 +1,26 @@
-import { CheckCheck, WandSparkles } from "lucide-react";
+import { CheckCheck, FileSpreadsheet, WandSparkles } from "lucide-react";
 import { useI18n, useStore } from "../state/contexts.js";
+import { checklistCsv } from "../utils/csv.js";
+import { checklistFileName, downloadBytes } from "../utils/download.js";
 import RequirementRow from "./RequirementRow.jsx";
 
 /** Right column: every requirement in `order`, each with exactly one status. */
 export default function RequirementChecklist() {
-  const { t } = useI18n();
+  const i18n = useI18n();
+  const { t } = i18n;
   const { state, derived, actions } = useStore();
   const required = state.requirements.filter((req) => req.mandatory).length;
+
+  const exportCsv = () => {
+    try {
+      const fileName = checklistFileName(state.tender.tender_id);
+      downloadBytes(new TextEncoder().encode(checklistCsv(derived.rows, i18n)), fileName, "text/csv;charset=utf-8");
+      actions.notify("success", "csv.done", { name: fileName });
+    } catch (error) {
+      console.error("CSV export failed:", error);
+      actions.notify("error", "error.generic");
+    }
+  };
 
   return (
     <section className="card checklist overflow-hidden" aria-labelledby="checklist-heading">
@@ -26,6 +40,10 @@ export default function RequirementChecklist() {
               {t("auto.confirmAll")}
             </button>
           )}
+          <button type="button" className="btn btn-secondary min-h-9 px-3" onClick={exportCsv}>
+            <FileSpreadsheet className="size-4 text-brand-700" aria-hidden="true" />
+            {t("csv.button")}
+          </button>
           <button
             type="button"
             className="btn btn-secondary min-h-9 px-3"

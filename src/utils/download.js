@@ -14,6 +14,11 @@ export function packageFileName(tenderId) {
   return `${sanitizeFileName(tenderId)}_Package.pdf`;
 }
 
+/** "<tender_id>_Checklist.csv" */
+export function checklistFileName(tenderId) {
+  return `${sanitizeFileName(tenderId)}_Checklist.csv`;
+}
+
 /** Save bytes as a file through a temporary <a download> link. */
 export function downloadBytes(bytes, fileName, type = "application/pdf") {
   const url = URL.createObjectURL(new Blob([bytes], { type }));
