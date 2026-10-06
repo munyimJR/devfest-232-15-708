@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "TenderPack - Tender Document Package Builder (100% in-browser)",
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
